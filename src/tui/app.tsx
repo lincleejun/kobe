@@ -861,21 +861,49 @@ function Shell(props: AppDeps) {
   const MIN_FILES_HEIGHT = 5
   const MIN_TERMINAL_HEIGHT = 5
   const dims = useTerminalDimensions()
-  const [sidebarWidth, setSidebarWidth] = createSignal(42)
-  // Initial workspace / files seeds: computed once from the terminal
-  // dims at mount. These are deliberately not reactive to terminal
-  // resizes — the user's last drag wins. Negative or undersized
-  // terminals just get clamped on first paint.
+  // Hydrate the resize-pane sizes from KV when present so a kobe restart
+  // lands on the layout the user dragged into last session. Defaults are
+  // computed off the live terminal dims when KV has nothing — first
+  // launch on a small terminal still gets a sensible starting point.
+  // We persist via createEffect below, debounced by the natural drag
+  // throttle (mouse-move events update the signal; KV.set is cheap).
+  const persistedSidebar = (() => {
+    const v = kv.get("paneSidebarWidth")
+    return typeof v === "number" && v >= MIN_SIDEBAR_WIDTH ? v : null
+  })()
+  const persistedWorkspace = (() => {
+    const v = kv.get("paneWorkspaceWidth")
+    return typeof v === "number" && v >= MIN_WORKSPACE_WIDTH ? v : null
+  })()
+  const persistedFiles = (() => {
+    const v = kv.get("paneFilesHeight")
+    return typeof v === "number" && v >= MIN_FILES_HEIGHT ? v : null
+  })()
   const initialDims = dims()
+  const [sidebarWidth, setSidebarWidth] = createSignal(persistedSidebar ?? 42)
+  // Initial workspace / files seeds: computed once from the terminal
+  // dims at mount when KV has nothing. These are deliberately not
+  // reactive to terminal resizes — the user's last drag wins.
   const [workspaceWidth, setWorkspaceWidth] = createSignal(
-    Math.max(MIN_WORKSPACE_WIDTH, Math.floor((initialDims.width - 42 - 1) * (2 / 3))),
+    persistedWorkspace ?? Math.max(MIN_WORKSPACE_WIDTH, Math.floor((initialDims.width - 42 - 1) * (2 / 3))),
   )
-  // Right column inner height ≈ terminal - topbar - statusbar - 2 borders.
-  // Topbar/statusbar are 1 row each; HSplitBorder consumes 1 row.
   const initialRightColumnHeight = Math.max(20, initialDims.height - 2 - 1)
   const [filesHeight, setFilesHeight] = createSignal(
-    Math.max(MIN_FILES_HEIGHT, Math.floor(initialRightColumnHeight * (2 / 3))),
+    persistedFiles ?? Math.max(MIN_FILES_HEIGHT, Math.floor(initialRightColumnHeight * (2 / 3))),
   )
+
+  // Persist on every resize. The signals only change during a drag (or
+  // a clamp on terminal resize), so this fires per drag-frame at most —
+  // KV.set is in-memory until the provider's debounced write hits disk.
+  createEffect(() => {
+    kv.set("paneSidebarWidth", sidebarWidth())
+  })
+  createEffect(() => {
+    kv.set("paneWorkspaceWidth", workspaceWidth())
+  })
+  createEffect(() => {
+    kv.set("paneFilesHeight", filesHeight())
+  })
 
   const clampSidebar = (w: number) => {
     const max = Math.max(
