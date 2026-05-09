@@ -49,7 +49,7 @@
 
 import type { Task, TaskStatus } from "@/types"
 import { TextAttributes } from "@opentui/core"
-import { type Accessor, For, Show, createEffect, createMemo, createSignal, on } from "solid-js"
+import { type Accessor, For, Show, createEffect, createMemo, createSignal, on, untrack } from "solid-js"
 import { SIDEBAR_WIDTH } from "../../component/sidebar"
 import { useTheme } from "../../context/theme"
 import { type SidebarView, buildRows, flattenIds } from "./groups"
@@ -73,6 +73,12 @@ export type SidebarProps = {
    * canonical entry point.
    */
   onAddTask?: () => void
+  /**
+   * Optional width override. When omitted, falls back to {@link SIDEBAR_WIDTH}.
+   * Wired by the Shell so the sidebar↔workspace splitter can resize the pane
+   * at runtime. Reactive — changing the accessor's value reflows immediately.
+   */
+  width?: Accessor<number>
 }
 
 /**
@@ -119,20 +125,27 @@ export function Sidebar(props: SidebarProps) {
 
   const [cursorIndex, setCursorIndex] = createSignal<number>(-1)
 
-  // Sync cursor from external selectedId. Runs whenever props.selectedId
-  // or the flat id list changes; reactive on both inputs.
-  createEffect(() => {
-    const id = props.selectedId()
-    const ids = flatIds()
-    if (id === null) {
-      if (cursorIndex() === -1 && ids.length > 0) setCursorIndex(0)
-      if (cursorIndex() >= ids.length) setCursorIndex(Math.max(0, ids.length - 1))
-      if (ids.length === 0) setCursorIndex(-1)
-      return
-    }
-    const idx = ids.indexOf(id)
-    if (idx >= 0 && idx !== cursorIndex()) setCursorIndex(idx)
-  })
+  // Sync cursor from external selectedId. Deps are *only* the selected
+  // id and the flat id list — we read `cursorIndex()` inside via
+  // `untrack` so cursor moves from j/k don't refire this effect (which
+  // would yank the cursor back to the selected task's position and
+  // make navigation impossible).
+  createEffect(
+    on(
+      () => [props.selectedId(), flatIds()] as const,
+      ([id, ids]) => {
+        const cur = untrack(cursorIndex)
+        if (id === null) {
+          if (cur === -1 && ids.length > 0) setCursorIndex(0)
+          else if (cur >= ids.length) setCursorIndex(Math.max(0, ids.length - 1))
+          else if (ids.length === 0) setCursorIndex(-1)
+          return
+        }
+        const idx = ids.indexOf(id)
+        if (idx >= 0 && idx !== cur) setCursorIndex(idx)
+      },
+    ),
+  )
 
   // Reset cursor to 0 on view switch — the previous index is meaningless
   // against the new filtered list. `on` so we react only to view
@@ -171,7 +184,7 @@ export function Sidebar(props: SidebarProps) {
 
   return (
     <box
-      width={SIDEBAR_WIDTH}
+      width={props.width ? props.width() : SIDEBAR_WIDTH}
       flexShrink={0}
       flexDirection="column"
       paddingTop={1}
