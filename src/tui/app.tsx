@@ -151,7 +151,7 @@ async function mountFakeEngineServer(fake: import("../../test/behavior/fake-engi
 /*  New-task dialog                                                       */
 /* --------------------------------------------------------------------- */
 
-type NewTaskInput = { repo: string; prompt: string; baseRef: string }
+type NewTaskInput = { repo: string; baseRef: string }
 
 /** Default base ref when the user leaves the field blank. */
 const DEFAULT_BASE_REF = "main"
@@ -217,8 +217,11 @@ function NewTaskDialog(props: {
 }) {
   const dialog = useDialog()
   const { theme } = useTheme()
-  const [field, setField] = createSignal<"prompt" | "repo" | "baseRef">("prompt")
-  const [prompt, setPrompt] = createSignal("")
+  // Dialog only asks for repo + branch now. The first prompt lives in
+  // the chat composer — orchestrator.runTask back-fills the task title
+  // from it on first submit (see PLACEHOLDER_TASK_TITLE in core.ts).
+  // Tab cycles between the two fields.
+  const [field, setField] = createSignal<"repo" | "baseRef">("repo")
   const [repo, setRepo] = createSignal(props.defaultRepo)
   const [baseRef, setBaseRef] = createSignal(DEFAULT_BASE_REF)
 
@@ -296,26 +299,20 @@ function NewTaskDialog(props: {
   const branchWindow = createMemo<PickerWindow>(() => windowAround(branchFiltered(), branchCursor()))
 
   function commit() {
-    const p = prompt().trim()
     const r = repo().trim()
-    if (!p || !r) return
+    if (!r) return
     const b = baseRef().trim() || DEFAULT_BASE_REF
-    props.onSubmit({ prompt: p, repo: r, baseRef: b })
+    props.onSubmit({ repo: r, baseRef: b })
     dialog.clear()
   }
 
   useBindings(() => ({
     bindings: [
       {
-        // 3-way cycle: prompt → repo → baseRef → prompt. Mirrors the
-        // visual top-to-bottom field order so muscle memory works.
+        // Tab toggles between repo and branch. Visual top-to-bottom
+        // order so muscle memory works.
         key: "tab",
-        cmd: () =>
-          setField((f) => {
-            if (f === "prompt") return "repo"
-            if (f === "repo") return "baseRef"
-            return "prompt"
-          }),
+        cmd: () => setField((f) => (f === "repo" ? "baseRef" : "repo")),
       },
       // up/down are field-scoped: on the repo field they navigate the
       // saved-repos picker; on the baseRef field they navigate the
@@ -373,23 +370,6 @@ function NewTaskDialog(props: {
         </text>
       </box>
       <box gap={0}>
-        <text fg={field() === "prompt" ? theme.accent : theme.textMuted}>first prompt</text>
-        <input
-          value={prompt()}
-          placeholder="e.g. fix the login redirect bug"
-          focused={field() === "prompt"}
-          onInput={(v: string) => setPrompt(v)}
-          onSubmit={() => {
-            if (!prompt().trim()) return
-            if (!repo().trim()) {
-              setField("repo")
-              return
-            }
-            commit()
-          }}
-        />
-      </box>
-      <box gap={0}>
         <text fg={field() === "repo" ? theme.accent : theme.textMuted}>repo path</text>
         <input
           value={repo()}
@@ -397,10 +377,6 @@ function NewTaskDialog(props: {
           focused={field() === "repo"}
           onInput={(v: string) => setRepo(v)}
           onSubmit={() => {
-            if (!prompt().trim()) {
-              setField("prompt")
-              return
-            }
             // If the picker has a highlighted match, prefer it over
             // the typed text (matches the branch field's behavior).
             const list = repoFiltered()
@@ -1026,24 +1002,24 @@ function Shell(props: AppDeps) {
   // Shared "open new-task dialog and create" handler. Bound to two
   // keys with different `enabled` guards (see useBindings calls below).
   async function openNewTaskFlow(): Promise<void> {
-    const result = await showNewTaskDialog(dialog, process.cwd(), savedRepos())
+    // Default the dialog to the last repo the user picked, falling
+    // back to cwd. Persisted via KV so it survives kobe restarts.
+    const lastRepo = (() => {
+      const raw = kv.get("lastNewTaskRepo")
+      return typeof raw === "string" && raw.trim() ? raw : process.cwd()
+    })()
+    const result = await showNewTaskDialog(dialog, lastRepo, savedRepos())
     if (!result) return
     try {
-      // Per the Wave 3 G pivot: we pass the prompt through and let
-      // the orchestrator derive a sidebar title. The chat pane below
-      // picks up `pendingPrompt` for the freshly-selected task and
-      // submits it as the first turn — that way the new-task flow is
-      // one keypress + the prompt the user already typed in the dialog.
+      // Dialog no longer asks for a first prompt — orchestrator gives
+      // the task PLACEHOLDER_TASK_TITLE and back-fills it from the
+      // user's first composer submit (see runTask). The user lands on
+      // the chat composer ready to type.
       const created = await props.orchestrator.createTask({
         repo: result.repo,
-        prompt: result.prompt,
         baseRef: result.baseRef,
       })
-      // Stage the prompt so the Chat pane can submit it as soon as it
-      // subscribes to the new task. The pending-prompt signal must be
-      // set BEFORE we change the selected task so the same microtask
-      // flush carries both updates.
-      setPendingPrompt({ taskId: created.id, prompt: result.prompt })
+      kv.set("lastNewTaskRepo", result.repo)
       setSelectedId(created.id)
     } catch (err) {
       // Surface failure as stderr; we don't have a global banner yet,
@@ -1082,12 +1058,14 @@ function Shell(props: AppDeps) {
     }
   }
 
-  // `n` (bare letter) opens the new-task dialog when (a) no task is
-  // selected AND (b) the chat composer isn't focused. Otherwise the
-  // composer claims `n` as literal input. `ctrl+n` (below) is the
-  // always-on path for "task already selected, want to add another".
+  // `n` (bare letter) opens the new-task dialog when the sidebar is
+  // focused. Scoping to sidebar-focus matches the muscle memory of
+  // "I'm browsing the task list, n = new" and keeps the letter free
+  // for literal input when the chat composer or any other pane's
+  // input is focused. `ctrl+n` (below) is the always-on path that
+  // works even mid-composer.
   useBindings(() => ({
-    enabled: dialog.stack.length === 0 && !selectedId() && focusedPane() !== "workspace",
+    enabled: dialog.stack.length === 0 && focusedPane() === "sidebar",
     bindings: [
       {
         key: "n",

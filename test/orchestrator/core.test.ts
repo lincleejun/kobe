@@ -161,9 +161,13 @@ describe("Orchestrator.createTask", () => {
     expect(task.title).toBe("fix the login redirect bug")
   })
 
-  test("rejects when both title and prompt are empty (no label to derive)", async () => {
+  test("falls back to PLACEHOLDER_TASK_TITLE when both title and prompt are empty", async () => {
+    // The dialog now creates tasks with no first prompt — runTask
+    // back-fills the title from the user's first composer submit. The
+    // pre-submit interim sits at the placeholder.
     const { orch } = await buildOrchestrator()
-    await expect(orch.createTask({ repo, prompt: "" })).rejects.toThrow(/prompt/i)
+    const t = await orch.createTask({ repo, prompt: "" })
+    expect(t.title).toBe("(new task)")
   })
 
   test("tasksSignal updates after createTask", async () => {

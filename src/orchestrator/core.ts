@@ -74,6 +74,19 @@ export interface OrchestratorDeps {
 /** Maximum simultaneous `in_progress` tasks. From DESIGN §11.5. */
 export const CONCURRENCY_CAP = 4
 
+/**
+ * Placeholder label used when the user creates a task without typing a
+ * first prompt (the new flow — the dialog only asks for repo + branch).
+ * `runTask` watches for this exact string on the first user submit and
+ * back-fills a derived title from the prompt. See {@link runTask}.
+ *
+ * The sentinel must NEVER be a value `deriveTitleFromPrompt` could
+ * produce — keep the leading paren so any user-typed prompt with this
+ * exact text gets stripped of the parens by the deriver and won't
+ * collide.
+ */
+export const PLACEHOLDER_TASK_TITLE = "(new task)"
+
 /** Thrown when a state-machine transition is illegal. */
 export class IllegalTransitionError extends Error {
   constructor(
@@ -118,17 +131,18 @@ export class TaskNotFoundError extends Error {
 export interface CreateTaskInput {
   readonly repo: string
   /**
-   * The user's first prompt. Required (we use the first ~40 chars as
-   * the auto-derived title — see {@link deriveTitleFromPrompt} — so
-   * a `null`/empty prompt gives us nothing to label the task with).
+   * The user's first prompt. Optional — when present, the first ~40
+   * characters become the auto-derived title (see
+   * {@link deriveTitleFromPrompt}). When absent, the task is given a
+   * placeholder title; the user can either type their first message in
+   * the composer afterward (the orchestrator auto-updates the title
+   * from the first non-empty `runTask` prompt — see {@link runTask})
+   * or pass `title` explicitly here.
    *
    * Claude Code does NOT persist a separate "title" field on its
-   * sessions, so we cannot recover one from `engine.readHistory`. The
-   * heuristic here is the only label the user will see in the sidebar
-   * unless/until a Phase 2 polish stream adds an explicit rename
-   * affordance or a side-LLM auto-summary.
+   * sessions, so we cannot recover one from `engine.readHistory`.
    */
-  readonly prompt: string
+  readonly prompt?: string
   /**
    * Optional explicit title override. When omitted (the common path),
    * we derive from `prompt` via {@link deriveTitleFromPrompt}. When
@@ -237,22 +251,21 @@ export class Orchestrator {
    */
   async createTask(input: CreateTaskInput): Promise<Task> {
     if (!input.repo) throw new Error("createTask: repo is required")
-    // Title is derived from prompt by default — Claude Code doesn't
-    // expose a session title, so we don't ask the user to invent one.
-    // Either an explicit `title` override OR a non-empty `prompt`
-    // must be present so the sidebar has something to render.
+    // Title precedence: explicit `title` > derived from `prompt` >
+    // placeholder. The placeholder is detected by `runTask` on the
+    // first user submit — at which point the prompt becomes the
+    // title via `deriveTitleFromPrompt`, so an empty initial title
+    // is the common path now (the new-task dialog no longer asks).
     const explicitTitle = input.title?.trim() ?? ""
-    const derivedTitle = explicitTitle || deriveTitleFromPrompt(input.prompt)
-    if (!derivedTitle) {
-      throw new Error("createTask: prompt (or title override) is required to derive a label")
-    }
+    const derivedTitle = explicitTitle || deriveTitleFromPrompt(input.prompt ?? "")
+    const finalTitle = derivedTitle || PLACEHOLDER_TASK_TITLE
 
     // Persist with a placeholder branch so we have an id to compute
     // paths from. We then create the worktree, then patch the branch
     // back onto the record. Two-phase to keep a single ulid id flowing
     // through both the worktree path and the persisted record.
     const placeholder = await this.store.create({
-      title: derivedTitle,
+      title: finalTitle,
       repo: input.repo,
       branch: "", // patched below
       worktreePath: "", // patched below
@@ -261,7 +274,12 @@ export class Orchestrator {
       archived: false,
     })
 
-    const branch = input.branch ?? autoBranch(derivedTitle, placeholder.id)
+    // The branch slug uses the placeholder title (sentinel or derived),
+    // not the eventual auto-renamed one — kobe-untitled-<ulid> works
+    // for both paths and `runTask`'s title backfill leaves the branch
+    // alone (renaming the on-disk worktree branch mid-session would
+    // detach claude's recorded cwd).
+    const branch = input.branch ?? autoBranch(finalTitle, placeholder.id)
 
     let info: { path: string; branch: string }
     try {
@@ -346,6 +364,15 @@ export class Orchestrator {
       // Persist the freshly-allocated session id so a future kobe
       // restart can resume.
       await this.store.update(task.id, { sessionId: handle.sessionId })
+      // First user submit on a placeholder-titled task → derive the
+      // sidebar label from the prompt, same heuristic createTask used
+      // when the dialog still asked for the first prompt. Only fires
+      // when the title is the sentinel AND the prompt is non-empty
+      // (an empty fallback prompt shouldn't rewrite the placeholder).
+      if (task.title === PLACEHOLDER_TASK_TITLE && prompt && prompt.trim().length > 0) {
+        const derived = deriveTitleFromPrompt(prompt)
+        if (derived) await this.store.update(task.id, { title: derived })
+      }
     }
     this.handles.set(task.id, handle)
 
