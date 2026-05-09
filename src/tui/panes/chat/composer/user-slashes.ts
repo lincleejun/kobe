@@ -62,19 +62,85 @@ async function isDir(path: string): Promise<boolean> {
 
 /**
  * Pull the `description:` value out of YAML frontmatter. Mirror of
- * `ClaudeCode::extract_description` (Rust). Returns null when the file
- * has no frontmatter, no closing `---`, or no `description:` key.
+ * `ClaudeCode::extract_description` (Rust) for the single-line case, with
+ * an additional kobe extension: YAML block scalars (`|` and `>`) are
+ * folded into a single string. Many real skills (e.g. `~/.claude/skills/
+ * autoplan/SKILL.md`) write a multi-paragraph description as `description:
+ * |` followed by indented continuation lines — vibe-kanban's parser
+ * returns the literal `|` for those, which is useless in the dropdown.
+ *
+ * Block scalar handling is intentionally minimal — no chomping indicators
+ * (`|-`, `|+`, `>-`, `>+`), no explicit indentation indicator (`|2`). We
+ * detect the indent from the first non-empty continuation line and stop at
+ * the first line that dedents below it. That covers every skill / command
+ * frontmatter we have seen in the wild.
+ *
+ * Returns null when the file has no frontmatter, no closing `---`, or no
+ * `description:` key.
  */
-function extractDescription(content: string): string | null {
+export function extractDescription(content: string): string | null {
   if (!content.startsWith("---")) return null
   const end = content.slice(3).indexOf("---")
   if (end < 0) return null
   const frontmatter = content.slice(3, 3 + end)
-  for (const rawLine of frontmatter.split("\n")) {
-    const line = rawLine.trim()
-    if (line.startsWith("description:")) {
-      return line.slice("description:".length).trim()
+  const lines = frontmatter.split("\n")
+  for (let i = 0; i < lines.length; i++) {
+    const rawLine = lines[i]
+    const trimmed = rawLine.trim()
+    if (!trimmed.startsWith("description:")) continue
+    const after = rawLine.slice(rawLine.indexOf("description:") + "description:".length)
+    const value = after.trim()
+
+    // Plain scalar: `description: foo` — return as-is.
+    if (value !== "|" && value !== ">") return value
+
+    // Block scalar — fold continuation lines.
+    const fold = value === ">"
+    const collected: string[] = []
+    let blockIndent: number | null = null
+    for (let j = i + 1; j < lines.length; j++) {
+      const cont = lines[j]
+      // Empty / whitespace-only line: keep as a paragraph break (literal)
+      // or as an empty entry that the folded join will collapse.
+      if (cont.trim() === "") {
+        collected.push("")
+        continue
+      }
+      const indent = cont.length - cont.trimStart().length
+      if (blockIndent === null) {
+        // First non-empty line establishes the block indent. If it's not
+        // indented at all, the block is empty — break.
+        if (indent === 0) break
+        blockIndent = indent
+      } else if (indent < blockIndent) {
+        // Dedent ends the block.
+        break
+      }
+      collected.push(cont.slice(blockIndent ?? indent))
     }
+    // Trim trailing empty lines (common when block is followed by another
+    // key) before joining.
+    while (collected.length > 0 && collected[collected.length - 1] === "") {
+      collected.pop()
+    }
+    if (collected.length === 0) return ""
+    if (fold) {
+      // `>` folds newlines into spaces; blank lines remain as newlines.
+      const out: string[] = []
+      let pending = ""
+      for (const line of collected) {
+        if (line === "") {
+          if (pending !== "") out.push(pending)
+          out.push("")
+          pending = ""
+        } else {
+          pending = pending === "" ? line : `${pending} ${line}`
+        }
+      }
+      if (pending !== "") out.push(pending)
+      return out.join("\n").replace(/\n+$/, "")
+    }
+    return collected.join("\n")
   }
   return null
 }
