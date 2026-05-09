@@ -226,8 +226,11 @@ export type AppDeps = {
 /* --------------------------------------------------------------------- */
 /*  PaneHeader — uniform CAPS-bold pane label (agent-deck-style chunking)  */
 /* --------------------------------------------------------------------- */
-function PaneHeader(props: { title: string; subtitle?: string }) {
+function PaneHeader(props: { title: string; subtitle?: string; focused?: boolean }) {
   const { theme } = useTheme()
+  // Focused panes get the primary accent color in their title; others
+  // dim to textMuted so the eye locates the active pane immediately.
+  const titleColor = () => (props.focused === false ? theme.textMuted : theme.primary)
   return (
     <box
       flexDirection="row"
@@ -237,7 +240,7 @@ function PaneHeader(props: { title: string; subtitle?: string }) {
       paddingRight={1}
       backgroundColor={theme.backgroundPanel}
     >
-      <text fg={theme.primary} attributes={TextAttributes.BOLD} wrapMode="none">
+      <text fg={titleColor()} attributes={TextAttributes.BOLD} wrapMode="none">
         {props.title}
       </text>
       <Show when={props.subtitle}>
@@ -248,6 +251,23 @@ function PaneHeader(props: { title: string; subtitle?: string }) {
     </box>
   )
 }
+
+/* --------------------------------------------------------------------- */
+/*  Pane focus model                                                       */
+/* --------------------------------------------------------------------- */
+/**
+ * Which pane currently owns the keyboard. Cycles via `tab` / `shift+tab`
+ * (per `useKobeKeybindings`'s reservation in `keybindings.ts`); jumps via
+ * `ctrl+1/2/3/4` for explicit pane targeting. Pane-local bindings gate
+ * on their own `focused` accessor so j/k/etc. only fire on the active
+ * pane.
+ *
+ * Order matters — `PANE_ORDER` defines the tab-cycle sequence and the
+ * 1-4 numeric mapping. Sidebar is `1` (leftmost), terminal is `4`
+ * (bottom-right).
+ */
+type PaneId = "sidebar" | "workspace" | "files" | "terminal"
+const PANE_ORDER = ["sidebar", "workspace", "files", "terminal"] as const satisfies readonly PaneId[]
 
 function StatusBar(props: { active?: string }) {
   const { theme } = useTheme()
@@ -336,6 +356,42 @@ function Shell(props: AppDeps) {
   const [previewApi, setPreviewApi] = createSignal<PreviewApi | null>(null)
 
   /* ------------------------------------------------------------------- */
+  /*  Pane focus — ctrl+1/2/3/4 jump, tab/shift+tab cycle                 */
+  /* ------------------------------------------------------------------- */
+  const [focusedPane, setFocusedPane] = createSignal<PaneId>("workspace")
+  const isFocused = (id: PaneId) => () => focusedPane() === id
+
+  function cycleFocus(delta: 1 | -1): void {
+    const order = PANE_ORDER
+    const idx = order.indexOf(focusedPane())
+    const next = (idx + delta + order.length) % order.length
+    setFocusedPane(order[next] as PaneId)
+  }
+
+  // Numeric jumps: ctrl+1..4 pick a pane explicitly. `ctrl` prefix avoids
+  // collision with FileTree's plain 1/2/3 tabs (All/Changes/Checks) and
+  // with composer typing.
+  useBindings(() => ({
+    enabled: dialog.stack.length === 0,
+    bindings: [
+      { key: "ctrl+1", cmd: () => setFocusedPane("sidebar") },
+      { key: "ctrl+2", cmd: () => setFocusedPane("workspace") },
+      { key: "ctrl+3", cmd: () => setFocusedPane("files") },
+      { key: "ctrl+4", cmd: () => setFocusedPane("terminal") },
+    ],
+  }))
+
+  // Tab / shift+tab cycle in the order defined by PANE_ORDER. The
+  // existing kobe keymap reserved tab/shift+tab for exactly this.
+  useBindings(() => ({
+    enabled: dialog.stack.length === 0,
+    bindings: [
+      { key: "tab", cmd: () => cycleFocus(1) },
+      { key: "shift+tab", cmd: () => cycleFocus(-1) },
+    ],
+  }))
+
+  /* ------------------------------------------------------------------- */
   /*  Center-column tab state — per-task                                  */
   /* ------------------------------------------------------------------- */
   // Per the resolved Wave-1 invariant ("each sidebar session = one
@@ -378,12 +434,16 @@ function Shell(props: AppDeps) {
       active: { kind: "file", path: relPath },
     }))
     previewApi()?.open(relPath)
+    // Opening a file from the file tree pulls focus to the workspace
+    // so the user can scroll/read with j/k without an extra ctrl+2.
+    setFocusedPane("workspace")
   }
 
   function selectChatTab(): void {
     const id = selectedId()
     if (!id) return
     mutateTabs(id, (cur) => ({ ...cur, active: "chat" }))
+    setFocusedPane("workspace")
   }
 
   function selectFileTab(relPath: string): void {
@@ -391,6 +451,7 @@ function Shell(props: AppDeps) {
     if (!id) return
     mutateTabs(id, (cur) => ({ ...cur, active: { kind: "file", path: relPath } }))
     previewApi()?.open(relPath)
+    setFocusedPane("workspace")
   }
 
   function closeFileTab(relPath: string): void {
@@ -485,7 +546,18 @@ function Shell(props: AppDeps) {
       <box flexDirection="row" flexGrow={1}>
         {/* Left: task sidebar (42 cells fixed). The sidebar's own
             "kobe v0.1.0" header serves as its pane identity. */}
-        <Sidebar tasks={tasksAcc} onSelect={(id: string) => setSelectedId(id)} selectedId={selectedId} />
+        <Sidebar
+          tasks={tasksAcc}
+          onSelect={(id: string) => {
+            setSelectedId(id)
+            // Selecting a task usually means "I want to look at it" —
+            // pull focus to workspace so the user can immediately type
+            // / scroll without another ctrl+2.
+            setFocusedPane("workspace")
+          }}
+          selectedId={selectedId}
+          focused={isFocused("sidebar")}
+        />
         {/* Center: tabbed (chat | <file>...) — primary interaction surface.
             `border={["left"]}` draws the agent-deck-style ┃ separator
             against the sidebar. Center gets twice the flex share of the
@@ -499,7 +571,11 @@ function Shell(props: AppDeps) {
           customBorderChars={SplitBorder.customBorderChars}
           borderColor={theme.border}
         >
-          <PaneHeader title="WORKSPACE" subtitle={activeTask()?.title ?? "no task"} />
+          <PaneHeader
+            title="WORKSPACE"
+            subtitle={activeTask()?.title ?? "no task"}
+            focused={focusedPane() === "workspace"}
+          />
           <CenterTabStrip
             isChatActive={isChatTabActive}
             activeFile={activeFileTabPath}
@@ -517,6 +593,7 @@ function Shell(props: AppDeps) {
                   diffBase={diffBaseAcc}
                   onOpen={(api) => setPreviewApi(api)}
                   hideInternalTabs={() => true}
+                  focused={isFocused("workspace")}
                 />
               }
             >
@@ -526,6 +603,7 @@ function Shell(props: AppDeps) {
                 title={activeTitleAcc}
                 pendingPrompt={pendingPromptForActive}
                 onPendingPromptConsumed={() => setPendingPrompt(null)}
+                focused={isFocused("workspace")}
               />
             </Show>
           </box>
@@ -548,9 +626,9 @@ function Shell(props: AppDeps) {
           borderColor={theme.border}
         >
           <box flexGrow={2} flexShrink={1} flexBasis={0} flexDirection="column">
-            <PaneHeader title="FILES" />
+            <PaneHeader title="FILES" focused={focusedPane() === "files"} />
             <box flexGrow={1}>
-              <FileTree worktreePath={worktreePathAcc} onOpenFile={openFileInCenter} />
+              <FileTree worktreePath={worktreePathAcc} onOpenFile={openFileInCenter} focused={isFocused("files")} />
             </box>
           </box>
           <box
@@ -565,9 +643,10 @@ function Shell(props: AppDeps) {
             <PaneHeader
               title="TERMINAL"
               subtitle={worktreePathAcc() ? worktreePathAcc()?.split("/").slice(-1)[0] : undefined}
+              focused={focusedPane() === "terminal"}
             />
             <box flexGrow={1}>
-              <Terminal cwd={worktreePathAcc} taskId={taskIdNullAcc} />
+              <Terminal cwd={worktreePathAcc} taskId={taskIdNullAcc} focused={isFocused("terminal")} />
             </box>
           </box>
         </box>
