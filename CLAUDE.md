@@ -2,10 +2,101 @@
 
 Goal: build a TUI that mimics Conductor's UX (multi-task AI orchestration), with Claude Code as the engine.
 
-**Read [HANDOFF.md](./HANDOFF.md) first** — it's the full briefing from the prior session. Don't skip it; the architecture decisions and constraints aren't obvious from the code (there is no code yet).
+**Read in order before doing anything**:
+1. [`HANDOFF.md`](./HANDOFF.md) — the briefing from the very first session.
+2. [`docs/DESIGN.md`](./docs/DESIGN.md) — design philosophy, architecture, tech stack lock-in.
+3. [`docs/PLAN.md`](./docs/PLAN.md) — Phase 0 → Phase 1 stream/wave plan.
+4. [`docs/HARNESS.md`](./docs/HARNESS.md) — agent self-test contract. **Load-bearing.**
+
+The architecture decisions are not obvious from the code (the code is mostly empty). The docs are the source of truth.
 
 ## Conventions
 
-- This project is empty so far. Anything you add is greenfield.
-- `refs/` contains study material (symlinks + clones), gitignored. Never edit anything inside `refs/`.
-- The user's name is Jackson (sma1lboy). Respond in the language they use.
+- `refs/` contains study material (symlinks + clones), gitignored. **Never edit anything inside `refs/`.**
+- The user's name is Jackson (sma1lboy). Respond in the language they use (Chinese or English).
+- Tech stack is locked: **TypeScript + `@opentui/core` + `@opentui/solid` + Solid.js + Bun**. Do not re-litigate.
+
+## Operating model — agent teams + self-validation
+
+This project does not run on solo subagents. It runs on **teams** of agents that self-validate.
+
+### Team mode (canonical)
+
+- Related streams group into a **team** (e.g. Foundation Team = streams 0.2 + 0.3 + 0.4).
+- Each team member runs in its own git worktree (`isolation: "worktree"`) to prevent cross-pollution.
+- Each member commits independently in its worktree branch.
+- The orchestrator (the main Claude Code session) merges the branches back to `main` only after every member is green.
+- Teammates don't edit files outside their slice. If they need a change there, they surface — they don't unilaterally widen scope.
+- A team is **done** when every member commits green and the merge lands.
+
+The named teams so far (see `docs/PLAN.md` for full breakdowns):
+- **Foundation Team** — streams 0.2, 0.3, 0.4. Lifts the opencode shell, defines core types, builds the behavior test harness.
+- **Wave 1 Team** — streams A, B, C, D. Engine impl, worktree manager, task index, theme/keybindings.
+- **Wave 3 Team** — streams G, H, I, J. The four panes that flank the chat.
+
+Sequential stages (0.1, E, F, K, L, M) are run as solo agents — but still under the same harness contract.
+
+### Agent self-validation (the rule that matters)
+
+> Tests are not just typecheck and `bun test`. **Tests include the agent running the actual product end-to-end and asserting visible behavior.** No human is in the loop for verification.
+
+Concretely, every stream that produces a user-visible change must include a **behavioral self-test**:
+
+1. The agent spawns kobe (or a stream-scoped subset) under PTY/tmux via the Stream 0.4 driver.
+2. Sends keystrokes as a real user would.
+3. Captures the visible screen.
+4. Asserts on visible state (text, layout, status badges).
+
+If the agent only ran `bun typecheck` and `bun test`, it has not validated the work. It has validated some functions. The bar is: *the agent has proven, by running the binary, that the product behaves correctly.* Without that proof, no commit.
+
+Full contract is in `docs/HARNESS.md`. Read it before spawning any team.
+
+### What surfaces to the human (Jackson)
+
+Bring to Jackson only:
+- Architectural decisions not in DESIGN.md.
+- 3-strike blockers (three failed fixes on the same root cause).
+- Cross-stream conflicts that need scope adjudication.
+- Wave-gate sign-offs (G0, G1, G2, G3, G4).
+- Intentional deviations from PLAN.md.
+
+Do not bring:
+- Routine compiler errors.
+- "Did this commit go through?" — check with `git log` first.
+- Whether to run `bun install`. Just run it.
+- File-naming choices within stream scope.
+
+## Hard rules (non-negotiable)
+
+### Commits
+
+- Commit at the end of each stream when the agent is green. The user has authorized per-stream commits in advance.
+- Commit message: `<type>: <stream id> — <one-line summary>` plus a 2-3 sentence body.
+- **NEVER** include `Co-Authored-By: Claude` or any AI/Anthropic/Claude attribution. No "Generated with Claude Code" footers. (From the workspace-level `/Users/jacksonc/i/CLAUDE.md`.)
+- **NEVER** use `--no-verify`, `--no-gpg-sign`, or skip hooks. If a hook fails, fix the underlying issue.
+
+### Deletion
+
+- **NEVER** delete files, branches, worktrees, or run `rm -rf` unless the user explicitly says "delete" or "remove" *in the same conversation turn*.
+- This includes: cleanup of stale worktrees, "fixing" the layout by removing files, anything destructive.
+- If a task seems to require deletion, surface and ask first.
+
+### Scope
+
+- A stream agent only edits files within its declared slice. Cross-stream changes are surfaced, not silently made.
+- 3-strike rule: same root cause failed three times → stop and surface.
+- Max-depth rule: 3+ levels of sub-investigation → surface findings before going deeper.
+
+### Don't touch
+
+- `refs/` — study material, read-only forever.
+- Other agents' worktree slices — coordinate via the orchestrator.
+- Workspace-level config (`/Users/jacksonc/i/CLAUDE.md`, global git config, etc.).
+
+## Phase status
+
+- **Phase 0**: foundation. Streams 0.1 (bootstrap, solo), then Foundation Team (0.2 + 0.3 + 0.4) in parallel.
+- **Phase 1**: build the 5-pane Conductor-shaped TUI. Waves 1–4 per `docs/PLAN.md`.
+- **Phase 2**: deferred. Conductor-as-backend mode. Hook points designed in; impl not yet.
+
+Update this section's status as gates G0–G4 close. See PLAN.md for the canonical state.

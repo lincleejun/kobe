@@ -2,6 +2,7 @@ refs/
 node_modules/
 dist/
 .kobe/
+.claude/
 .DS_Store
 *.log
 .env
