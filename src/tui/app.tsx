@@ -279,7 +279,7 @@ function Shell(props: AppDeps) {
   const dialog = useDialog()
 
   const tasksAcc: Accessor<ReturnType<typeof props.orchestrator.listTasks>> = props.orchestrator.tasksSignal()
-  const [selectedId, setSelectedId] = createSignal<string | undefined>(undefined)
+  const [selectedId, setSelectedId] = createSignal<string | null>(null)
 
   const activeTask = createMemo(() => {
     const id = selectedId()
@@ -344,8 +344,12 @@ function Shell(props: AppDeps) {
     <box flexDirection="column" flexGrow={1} backgroundColor={theme.background}>
       <TopBar activeTitle={activeTask()?.title} />
       <box flexDirection="row" flexGrow={1}>
-        <Sidebar tasks={tasksAcc} onSelect={(id: string) => setSelectedId(id)} selectedId={selectedId()} />
-        <ChatPlaceholder orchestrator={props.orchestrator} taskId={selectedId()} title={activeTask()?.title} />
+        <Sidebar tasks={tasksAcc} onSelect={(id: string) => setSelectedId(id)} selectedId={selectedId} />
+        <ChatPlaceholder
+          orchestrator={props.orchestrator}
+          taskId={selectedId() ?? undefined}
+          title={activeTask()?.title}
+        />
       </box>
       <StatusBar active={activeTask()?.title} />
     </box>

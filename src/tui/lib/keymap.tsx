@@ -71,7 +71,11 @@ function matchKey(evt: KeyEvent): string[] {
 
   if (mods.length === 0) return base
   const prefix = `${mods.join("+")}+`
-  return base.flatMap((n) => [prefix + n, n])
+  // When modifiers are present, return ONLY the prefixed forms. A plain
+  // `{ key: "k" }` binding must NOT catch `ctrl+k` — otherwise pane-local
+  // bindings (sidebar j/k) shadow global chords (`ctrl+k` palette).
+  // Bindings that want both behaviors must register both keys explicitly.
+  return base.map((n) => prefix + n)
 }
 
 function ensureInstalled() {
