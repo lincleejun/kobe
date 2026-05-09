@@ -38,7 +38,7 @@
  */
 
 import { type ScrollBoxRenderable, TextAttributes } from "@opentui/core"
-import { type Accessor, For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount } from "solid-js"
+import { type Accessor, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount } from "solid-js"
 import type { Orchestrator } from "../../../orchestrator/core.ts"
 import type { OrchestratorEvent } from "../../../types/engine.ts"
 import type { ChatTab } from "../../../types/task.ts"
@@ -605,38 +605,12 @@ export function Chat(props: ChatProps) {
     void send()
   }
 
-  function tabLabel(tab: ChatTab, idx: number): string {
-    return tab.title && tab.title.length > 0 ? tab.title : `chat ${idx + 1}`
-  }
-
   return (
     <box flexGrow={1} flexDirection="column" paddingLeft={1} paddingRight={1}>
-      {/* Tab bar — agent-deck-style bracket chips. Active tab fg is
-          theme.accent + bold; inactive in textMuted. Rendered always
-          (even with one tab) so users discover ctrl+t. Hidden when no
-          task is selected.
-          The redundant "chat — title" header line was dropped: the
-          workspace pane already shows the task title, and the tab bar
-          IS the chat-header for multi-tab. */}
-      <Show when={props.taskId() && tabs().length > 0}>
-        <box paddingTop={1} flexDirection="row" flexShrink={0} gap={1} paddingBottom={1}>
-          <For each={tabs()}>
-            {(tab, i) => {
-              const isActive = () => activeTabId() === tab.id
-              return (
-                <text
-                  fg={isActive() ? theme.accent : theme.textMuted}
-                  attributes={isActive() ? TextAttributes.BOLD : undefined}
-                  wrapMode="none"
-                  onMouseUp={() => selectTabByIndex(i())}
-                >
-                  [{i() + 1}] {tabLabel(tab, i())}
-                </text>
-              )
-            }}
-          </For>
-        </box>
-      </Show>
+      {/* Tab bar lives in the workspace's CenterTabStrip — see app.tsx.
+          Chat tabs are rendered alongside open files there so we don't
+          double up tab UI. ctrl+t / ctrl+w / ctrl+1..9 / ctrl+tab keys
+          are still handled here. */}
 
       {/* Empty state for "no task selected". */}
       <Show when={!props.taskId()}>

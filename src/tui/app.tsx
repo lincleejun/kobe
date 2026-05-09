@@ -32,7 +32,7 @@ import { Orchestrator } from "../orchestrator/core.ts"
 import { TaskIndexStore } from "../orchestrator/index/store.ts"
 import { GitWorktreeManager } from "../orchestrator/worktree/manager.ts"
 import type { AIEngine } from "../types/engine.ts"
-import type { Task } from "../types/task.ts"
+import type { ChatTab, Task } from "../types/task.ts"
 import { CreatePRButton } from "./component/create-pr-button"
 import { HelpDialog } from "./component/help-dialog"
 import { SettingsDialog } from "./component/settings-dialog"
@@ -1095,6 +1095,25 @@ function Shell(props: AppDeps) {
     setFocusedPane("workspace")
   }
 
+  // Chat tabs (multitab) — pulled off the active task so the
+  // CenterTabStrip can render one chip per chat tab alongside the
+  // file tabs. activeChatTabIdAcc tracks which chat tab the
+  // orchestrator currently considers active; click-to-switch on a
+  // chip flows through `selectChatTabById` which in turn calls
+  // orchestrator.setActiveTab + flips the workspace tab to chat.
+  const activeChatTabsAcc = createMemo<readonly ChatTab[]>(() => activeTask()?.tabs ?? [])
+  const activeChatTabIdAcc = createMemo<string | null>(() => activeTask()?.activeTabId ?? null)
+  function selectChatTabById(tabId: string): void {
+    const id = selectedId()
+    if (!id) return
+    void props.orchestrator.setActiveTab(id, tabId).catch((err: unknown) => {
+      // eslint-disable-next-line no-console
+      console.error("[kobe] setActiveTab failed:", err)
+    })
+    mutateTabs(id, (cur) => ({ ...cur, active: "chat" }))
+    setFocusedPane("workspace")
+  }
+
   function selectFileTab(relPath: string): void {
     const id = selectedId()
     if (!id) return
@@ -1429,7 +1448,10 @@ function Shell(props: AppDeps) {
             isChatActive={isChatTabActive}
             activeFile={activeFileTabPath}
             openFiles={openFileTabs}
+            chatTabs={activeChatTabsAcc}
+            activeChatTabId={activeChatTabIdAcc}
             onSelectChat={selectChatTab}
+            onSelectChatTab={selectChatTabById}
             onSelectFile={selectFileTab}
             onCloseFile={closeFileTab}
           />
@@ -1514,11 +1536,24 @@ function CenterTabStrip(props: {
   isChatActive: Accessor<boolean>
   activeFile: Accessor<string | null>
   openFiles: Accessor<readonly string[]>
+  /**
+   * Per-task chat tabs. With multitab, "chat" is no longer a single
+   * entry — each tab gets its own chip in this strip alongside the
+   * file tabs, so the user has one unified tab navigation. Falls
+   * back to a single static "chat" chip when the task has no tabs
+   * yet (e.g. before the first runTask).
+   */
+  chatTabs: Accessor<readonly ChatTab[]>
+  activeChatTabId: Accessor<string | null>
   onSelectChat: () => void
+  onSelectChatTab: (tabId: string) => void
   onSelectFile: (path: string) => void
   onCloseFile: (path: string) => void
 }) {
   const { theme } = useTheme()
+  /** Display label for a chat tab — falls back to `chat N`. */
+  const chatTabLabel = (tab: ChatTab, idx: number) =>
+    tab.title && tab.title.length > 0 ? tab.title : `chat ${idx + 1}`
   return (
     <box
       flexDirection="row"
@@ -1528,20 +1563,68 @@ function CenterTabStrip(props: {
       paddingRight={1}
       backgroundColor={theme.backgroundPanel}
     >
-      <box
-        flexDirection="row"
-        paddingLeft={1}
-        paddingRight={1}
-        backgroundColor={props.isChatActive() ? theme.primary : theme.backgroundElement}
-        onMouseUp={() => props.onSelectChat()}
+      <Show
+        when={props.chatTabs().length > 0}
+        fallback={
+          // Pre-runTask state — task has no tabs yet (or no task at
+          // all). Render the static "chat" chip so the strip isn't
+          // empty and the user can still see they're on chat.
+          <box
+            flexDirection="row"
+            paddingLeft={1}
+            paddingRight={1}
+            backgroundColor={props.isChatActive() ? theme.primary : theme.backgroundElement}
+            onMouseUp={() => props.onSelectChat()}
+          >
+            <text
+              fg={props.isChatActive() ? theme.selectedListItemText : theme.text}
+              attributes={props.isChatActive() ? TextAttributes.BOLD : undefined}
+            >
+              chat
+            </text>
+          </box>
+        }
       >
-        <text
-          fg={props.isChatActive() ? theme.selectedListItemText : theme.text}
-          attributes={props.isChatActive() ? TextAttributes.BOLD : undefined}
-        >
-          chat
-        </text>
-      </box>
+        <For each={props.chatTabs()}>
+          {(tab, i) => {
+            // A chat tab chip is "active" only when the workspace is on
+            // chat AND this is the active chat tab. When chat is open
+            // but a different tab is selected, we still want it to look
+            // distinct from "chat is hidden behind a file tab" — render
+            // the active chat-tab in primary, the inactive chat-tabs in
+            // a softer style, and all of them dim when chat isn't the
+            // workspace tab at all.
+            const isPrimary = () => props.isChatActive() && props.activeChatTabId() === tab.id
+            const isVisibleButOther = () => props.isChatActive() && !isPrimary()
+            return (
+              <box
+                flexDirection="row"
+                paddingLeft={1}
+                paddingRight={1}
+                backgroundColor={isPrimary() ? theme.primary : theme.backgroundElement}
+                onMouseUp={() => {
+                  if (!props.isChatActive()) props.onSelectChat()
+                  props.onSelectChatTab(tab.id)
+                }}
+              >
+                <text
+                  fg={
+                    isPrimary()
+                      ? theme.selectedListItemText
+                      : isVisibleButOther()
+                        ? theme.text
+                        : theme.textMuted
+                  }
+                  attributes={isPrimary() ? TextAttributes.BOLD : undefined}
+                  wrapMode="none"
+                >
+                  {chatTabLabel(tab, i())}
+                </text>
+              </box>
+            )
+          }}
+        </For>
+      </Show>
       <For each={props.openFiles()}>
         {(file) => {
           const isActive = () => props.activeFile() === file
