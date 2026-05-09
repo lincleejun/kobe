@@ -402,7 +402,16 @@ function Shell(props: AppDeps) {
   // Per-task accessors for the right-column panes. FileTree + Preview key
   // off `worktreePath`; Terminal keys off both `cwd` and `taskId` (so the
   // pty registry can deduplicate per task per the resolved Wave-1 decision).
-  const worktreePathAcc = createMemo<string | null>(() => activeTask()?.worktreePath ?? null)
+  //
+  // Empty string is normalised to null: orchestrator.createTask publishes
+  // a transient placeholder task with worktreePath="" before the worktree
+  // is actually written to disk. Treating "" as a real path would call
+  // `git ls-files` with cwd="" and crash. The placeholder window is short
+  // (one git worktree add) but the subscribers see it.
+  const worktreePathAcc = createMemo<string | null>(() => {
+    const path = activeTask()?.worktreePath
+    return path ? path : null
+  })
   const taskIdNullAcc = createMemo<string | null>(() => selectedId())
   // Diff base — for v1, just compare against HEAD (working-tree changes).
   // Wave 4 polish makes this configurable per-task (e.g. branch fork point).
