@@ -55,9 +55,10 @@ import type { OrchestratorEvent } from "../../../types/engine.ts"
 import type { SlashEntry } from "../../context/command-palette"
 import { useTheme } from "../../context/theme"
 import { useDialog } from "../../ui/dialog"
-import { BUILTIN_CLAUDE_SLASHES } from "./composer/builtin-slashes"
+import { type BuiltinSlash, BUILTIN_CLAUDE_SLASHES } from "./composer/builtin-slashes"
 import { ModelPicker } from "./composer/ModelPicker"
 import { modelLabelFor } from "./composer/models"
+import { loadUserSlashes } from "./composer/user-slashes"
 import { Composer } from "./Composer"
 import { MessageList } from "./MessageList"
 import {
@@ -101,34 +102,58 @@ export function Chat(props: ChatProps) {
   const { theme } = useTheme()
   const dialog = useDialog()
 
-  // Slash-command list — sourced verbatim from claude-code's command
-  // directory (refs/claude-code/src/commands/) via the build-time
-  // extractor at scripts/extract-claude-code-commands.mjs. The static
-  // manifest at ./composer/builtin-slashes.ts is the canonical set
-  // kobe surfaces in the composer dropdown. We don't add kobe-specific
-  // slashes here — keyboard shortcuts (n / d / a) own the orchestrator
-  // verbs (new task / delete / archive) so the slash menu stays the
-  // pure claude-code surface the user already knows.
+  // Slash-command list. Two sources, merged on every task switch:
   //
-  // Selection runs the entry's onSelect callback, which we wire to
-  // submit `/<name>` (with any aliases preserved as metadata) as the
-  // next prompt for the active task. Whether the claude subprocess
-  // recognizes the slash command in -p mode is its responsibility —
-  // we just forward.
-  const slashes = createMemo<readonly SlashEntry[]>(() =>
-    BUILTIN_CLAUDE_SLASHES.map((entry) => ({
-      display: `/${entry.name}`,
-      description: entry.description || undefined,
-      aliases: entry.aliases?.map((a) => `/${a}`),
-      onSelect: () => {
-        // Route through `send()` (declared below) so the user's slash
-        // command appears in the chat history just like a typed
-        // message — `runTask` directly would send it to the engine
-        // without populating the local message list.
-        void send(`/${entry.name}`)
+  //   1. Built-ins — from refs/claude-code/src/commands/, baked into
+  //      ./composer/builtin-slashes.ts via scripts/extract-claude-code-commands.mjs.
+  //      Filtered to commands that actually run in `claude -p`.
+  //   2. User-defined — `<worktree>/.claude/{commands,skills}/` plus
+  //      `~/.claude/{commands,skills}/`, scanned at runtime by
+  //      loadUserSlashes() (ported from vibe-kanban's
+  //      slash_commands.rs). Project entries shadow global ones; user
+  //      entries shadow built-ins on name collision.
+  //
+  // We don't add kobe-specific slashes here — keyboard shortcuts
+  // (n / d / a) own the orchestrator verbs so the slash menu stays
+  // the pure claude-code surface.
+  const [userSlashes, setUserSlashes] = createSignal<readonly BuiltinSlash[]>([])
+  createEffect(
+    on(
+      () => props.taskId(),
+      (taskId) => {
+        // Reload on task switch — project-scoped entries change with
+        // the worktree. Errors are swallowed inside loadUserSlashes;
+        // the catch here is just defense in depth.
+        const task = taskId ? props.orchestrator.getTask(taskId) : undefined
+        const wt = task?.worktreePath || undefined
+        loadUserSlashes(wt)
+          .then(setUserSlashes)
+          .catch(() => setUserSlashes([]))
       },
-    })),
+    ),
   )
+
+  const slashes = createMemo<readonly SlashEntry[]>(() => {
+    // User overrides built-in on name collision (mirrors vibe-kanban's
+    // HashMap.extend ordering: later writes win).
+    const map = new Map<string, BuiltinSlash>()
+    for (const e of BUILTIN_CLAUDE_SLASHES) map.set(e.name, e)
+    for (const e of userSlashes()) map.set(e.name, e)
+    return [...map.values()]
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map((entry) => ({
+        display: `/${entry.name}`,
+        description: entry.description || undefined,
+        aliases: entry.aliases?.map((a) => `/${a}`),
+        onSelect: () => {
+          // Route through `send()` (declared below) so the user's slash
+          // command appears in the chat history just like a typed
+          // message — `runTask` directly would send it to the engine
+          // without populating the local message list.
+          void send(`/${entry.name}`)
+        },
+      }))
+  })
 
   // The whole chat state lives in one signal. Solid's structural sharing
   // makes whole-state updates cheap; we don't bother with finer-grained
