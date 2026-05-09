@@ -276,8 +276,8 @@ export function FileTree(props: FileTreeProps) {
   return (
     <box
       backgroundColor={theme.backgroundPanel}
-      width={FILETREE_WIDTH}
-      height="100%"
+      flexDirection="column"
+      flexGrow={1}
       paddingTop={1}
       paddingBottom={1}
       paddingLeft={2}
@@ -303,13 +303,14 @@ export function FileTree(props: FileTreeProps) {
         </For>
       </box>
 
-      {/* Body: scrollable list. Different empty-states per tab + state. */}
+      {/* Body: scrollable list. Scrollbar styled subtle — track blends
+         into the panel bg, thumb is muted text color. */}
       <scrollbox
         flexGrow={1}
         verticalScrollbarOptions={{
           trackOptions: {
-            backgroundColor: theme.background,
-            foregroundColor: theme.borderActive,
+            backgroundColor: theme.backgroundPanel,
+            foregroundColor: theme.backgroundPanel,
           },
         }}
       >
