@@ -23,7 +23,7 @@
 import * as fs from "node:fs"
 import { homedir } from "node:os"
 import { basename, join } from "node:path"
-import { TextAttributes } from "@opentui/core"
+import { RGBA, TextAttributes } from "@opentui/core"
 import { render, useTerminalDimensions } from "@opentui/solid"
 import { type Accessor, For, Match, Show, Switch, createEffect, createMemo, createSignal, onMount } from "solid-js"
 import pkg from "../../package.json" with { type: "json" }
@@ -837,6 +837,21 @@ function Shell(props: AppDeps) {
   const dialog = useDialog()
   const kv = useKV()
 
+  // Side rails (sidebar + right column) paint a slightly translucent
+  // version of `theme.backgroundPanel`. The intent: keep the panel
+  // tint visible so the IDE-style work-area-vs-rails hierarchy reads,
+  // but let the underlying terminal bg / image / opacity show through
+  // a touch when transparentBackground is on, AND make the rails feel
+  // a hair softer vs the chat in opaque mode (8-bit alpha composites
+  // against the theme bg, dragging the rail tone slightly toward bg
+  // so it's clearly distinct from a pure opaque panel block).
+  // ~80% opacity = noticeable lift but the panel still looks tinted.
+  const RAIL_ALPHA = 204
+  const railBg = createMemo(() => {
+    const [r, g, b] = theme.backgroundPanel.toInts()
+    return RGBA.fromInts(r, g, b, RAIL_ALPHA)
+  })
+
   // Theme persistence — on mount, hydrate from KV (validates the
   // stored name against the bundled list to drop stale entries from a
   // theme that was renamed). On every theme switch, persist the new
@@ -1464,7 +1479,7 @@ function Shell(props: AppDeps) {
         <box
           flexShrink={0}
           flexDirection="column"
-          backgroundColor={theme.backgroundPanel}
+          backgroundColor={railBg()}
           onMouseUp={() => setFocusedPane("sidebar")}
         >
           <Sidebar
@@ -1571,7 +1586,7 @@ function Shell(props: AppDeps) {
           flexGrow={1}
           flexShrink={1}
           flexBasis={0}
-          backgroundColor={theme.backgroundPanel}
+          backgroundColor={railBg()}
         >
           <box flexShrink={0} height={filesHeight()} flexDirection="column" onMouseUp={() => setFocusedPane("files")}>
             <PaneHeader title="FILES" focused={focusedPane() === "files"} />
