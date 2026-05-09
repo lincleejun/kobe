@@ -11,6 +11,9 @@
  *   pane via PTY without spinning up the full app. Each branch is one
  *   if-statement — orchestrator merges keep them independent.
  *
+ *   Late dynamic imports keep the test fixtures out of the production
+ *   bundle's static graph.
+ *
  *   - `KOBE_FILETREE_HOST=1` (Stream H) — mount `<FileTree>`. Uses
  *     `KOBE_FILETREE_WORKTREE`, `KOBE_FILETREE_OUTPUT`.
  *   - `KOBE_PREVIEW_HOST=1` (Stream I) — mount `<Preview>`. Uses
@@ -34,6 +37,11 @@ async function main(): Promise<void> {
   if (process.env.KOBE_PREVIEW_HOST === "1") {
     const { startPreviewHost } = await import("../../test/behavior/fixtures/preview-host.tsx")
     await startPreviewHost()
+    return
+  }
+  if (process.env.KOBE_TERMINAL_HOST === "1") {
+    const { startTerminalHost } = await import("../../test/behavior/fixtures/terminal-host.tsx")
+    await startTerminalHost()
     return
   }
   // Future: parse argv here (e.g. `kobe --repo <path>`, `kobe new "title"`).
