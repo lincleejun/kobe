@@ -30,6 +30,7 @@ import { Orchestrator } from "../orchestrator/core.ts"
 import { TaskIndexStore } from "../orchestrator/index/store.ts"
 import { GitWorktreeManager } from "../orchestrator/worktree/manager.ts"
 import type { AIEngine } from "../types/engine.ts"
+import { SplitBorder } from "./component/border"
 import { HelpDialog } from "./component/help-dialog"
 import { CommandPaletteProvider } from "./context/command-palette"
 import { useKobeKeybindings } from "./context/keybindings"
@@ -220,6 +221,32 @@ function showNewTaskDialog(dialog: DialogContext, defaultRepo: string): Promise<
 
 export type AppDeps = {
   orchestrator: Orchestrator
+}
+
+/* --------------------------------------------------------------------- */
+/*  PaneHeader — uniform CAPS-bold pane label (agent-deck-style chunking)  */
+/* --------------------------------------------------------------------- */
+function PaneHeader(props: { title: string; subtitle?: string }) {
+  const { theme } = useTheme()
+  return (
+    <box
+      flexDirection="row"
+      justifyContent="space-between"
+      flexShrink={0}
+      paddingLeft={1}
+      paddingRight={1}
+      backgroundColor={theme.backgroundPanel}
+    >
+      <text fg={theme.primary} attributes={TextAttributes.BOLD} wrapMode="none">
+        {props.title}
+      </text>
+      <Show when={props.subtitle}>
+        <text fg={theme.textMuted} wrapMode="none">
+          {props.subtitle}
+        </text>
+      </Show>
+    </box>
+  )
 }
 
 function StatusBar(props: { active?: string }) {
@@ -456,10 +483,20 @@ function Shell(props: AppDeps) {
     <box flexDirection="column" flexGrow={1} backgroundColor={theme.background}>
       <TopBar activeTitle={activeTask()?.title} />
       <box flexDirection="row" flexGrow={1}>
-        {/* Left: task sidebar (42 cells fixed) */}
+        {/* Left: task sidebar (42 cells fixed). The sidebar's own
+            "kobe v0.1.0" header serves as its pane identity. */}
         <Sidebar tasks={tasksAcc} onSelect={(id: string) => setSelectedId(id)} selectedId={selectedId} />
-        {/* Center: tabbed (chat | <file>...) — primary interaction surface */}
-        <box flexDirection="column" flexGrow={1}>
+        {/* Center: tabbed (chat | <file>...) — primary interaction surface.
+            `border={["left"]}` draws the agent-deck-style ┃ separator
+            against the sidebar. */}
+        <box
+          flexDirection="column"
+          flexGrow={1}
+          border={["left"]}
+          customBorderChars={SplitBorder.customBorderChars}
+          borderColor={theme.border}
+        >
+          <PaneHeader title="WORKSPACE" subtitle={activeTask()?.title ?? "no task"} />
           <CenterTabStrip
             isChatActive={isChatTabActive}
             activeFile={activeFileTabPath}
@@ -490,13 +527,32 @@ function Shell(props: AppDeps) {
             </Show>
           </box>
         </box>
-        {/* Right: file tree top, terminal bottom */}
-        <box flexDirection="column" width={50} flexShrink={0} backgroundColor={theme.backgroundPanel}>
-          <box flexGrow={2} flexShrink={1} flexBasis={0}>
-            <FileTree worktreePath={worktreePathAcc} onOpenFile={openFileInCenter} />
+        {/* Right column: FILES top + TERMINAL bottom. Each gets a CAPS
+            pane header. Vertical separator from center via `border=["left"]`,
+            horizontal split between FILES and TERMINAL via a thin row. */}
+        <box
+          flexDirection="column"
+          width={50}
+          flexShrink={0}
+          backgroundColor={theme.backgroundPanel}
+          border={["left"]}
+          customBorderChars={SplitBorder.customBorderChars}
+          borderColor={theme.border}
+        >
+          <box flexGrow={2} flexShrink={1} flexBasis={0} flexDirection="column">
+            <PaneHeader title="FILES" />
+            <box flexGrow={1}>
+              <FileTree worktreePath={worktreePathAcc} onOpenFile={openFileInCenter} />
+            </box>
           </box>
-          <box flexGrow={1} flexShrink={1} flexBasis={0}>
-            <Terminal cwd={worktreePathAcc} taskId={taskIdNullAcc} />
+          <box flexGrow={1} flexShrink={1} flexBasis={0} flexDirection="column" backgroundColor={theme.background}>
+            <PaneHeader
+              title="TERMINAL"
+              subtitle={worktreePathAcc() ? worktreePathAcc()?.split("/").slice(-1)[0] : undefined}
+            />
+            <box flexGrow={1}>
+              <Terminal cwd={worktreePathAcc} taskId={taskIdNullAcc} />
+            </box>
           </box>
         </box>
       </box>
