@@ -61,13 +61,13 @@ test("`esc` closes the help dialog", async () => {
   // ESC = 0x1b. The DialogProvider's escape binding (registered higher on
   // the binding stack) pops the top dialog.
   await kobe.sendKeys("\x1b")
-  // Poll the screen until the dialog has been redrawn over. After Wave 2
-  // the sidebar's footer reads "+ Add repo" (always rendered behind the
-  // dialog stack and repainted on dismiss). The assertion is "the
-  // post-dismiss UI is still painting", not a content check on the dialog
-  // disappearance.
-  const after = await kobe.waitFor((s) => s.includes("Add repo"), 5_000)
-  expect(after).toContain("Add repo")
+  // Poll the screen until the dialog has been redrawn over. The
+  // sidebar's status groups ("In progress", "In review", ...) are
+  // always rendered behind the dialog stack and repainted on dismiss.
+  // The assertion is "the post-dismiss UI is still painting", not a
+  // content check on the dialog disappearance.
+  const after = await kobe.waitFor((s) => s.includes("In progress"), 5_000)
+  expect(after).toContain("In progress")
 }, 30_000)
 
 test("`ctrl+k` (the cmd+k chord on a PTY) opens the command palette", async () => {
