@@ -593,8 +593,8 @@ export function Composer(props: ComposerProps) {
           backgroundColor={theme.backgroundElement}
           paddingLeft={2}
           paddingRight={2}
-          paddingTop={0}
-          paddingBottom={0}
+          paddingTop={1}
+          paddingBottom={1}
           border={["left"]}
           borderColor={railColor()}
           customBorderChars={SplitBorder.customBorderChars}
