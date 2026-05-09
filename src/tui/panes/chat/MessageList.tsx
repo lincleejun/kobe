@@ -47,6 +47,13 @@
 import { TextAttributes } from "@opentui/core"
 import { For, Show } from "solid-js"
 import { useTheme } from "../../context/theme"
+import {
+  COMMAND_ARGS_TAG,
+  COMMAND_NAME_TAG,
+  LOCAL_COMMAND_STDERR_TAG,
+  LOCAL_COMMAND_STDOUT_TAG,
+  extractTag,
+} from "./composer/xml-tags"
 import { Loading } from "./Loading"
 import { Markdown } from "./Markdown"
 import type { ChatRow } from "./store"
@@ -170,13 +177,85 @@ function safeStringify(v: unknown): string {
  */
 function UserRow(props: { text: string }) {
   const { theme } = useTheme()
+  // Parse claude-code's XML wrappers — `<command-name>` / `<command-args>`
+  // for user-typed slash commands, `<local-command-stdout>` / -stderr for
+  // their results. Renderers below mirror refs/claude-code/src/components/
+  // messages/UserLocalCommandOutputMessage.tsx so the visual language is
+  // exactly claude-code's: `/cmd args` chip + `⎿` indented body.
+  const parsed = () => {
+    const text = props.text
+    const cmd = extractTag(text, COMMAND_NAME_TAG)
+    if (cmd) {
+      const args = extractTag(text, COMMAND_ARGS_TAG) ?? ""
+      return { kind: "command" as const, command: cmd, args }
+    }
+    const stdout = extractTag(text, LOCAL_COMMAND_STDOUT_TAG)
+    const stderr = extractTag(text, LOCAL_COMMAND_STDERR_TAG)
+    if (stdout || stderr) {
+      return { kind: "command-output" as const, stdout: stdout?.trim() ?? "", stderr: stderr?.trim() ?? "" }
+    }
+    return { kind: "plain" as const, text }
+  }
+  const view = parsed()
+  if (view.kind === "command") {
+    return (
+      <box paddingTop={1} flexDirection="row" gap={1}>
+        <text fg={theme.accent} attributes={TextAttributes.BOLD}>
+          &gt;
+        </text>
+        <box flexGrow={1} flexDirection="row" gap={1}>
+          <text fg={theme.primary} attributes={TextAttributes.BOLD} wrapMode="none">
+            {view.command}
+          </text>
+          {view.args ? (
+            <text fg={theme.textMuted} wrapMode="none">
+              {view.args}
+            </text>
+          ) : null}
+        </box>
+      </box>
+    )
+  }
+  if (view.kind === "command-output") {
+    // claude-code's convention: indent under a `⎿` rule glyph in textMuted.
+    // Empty content (NO_CONTENT_MESSAGE) is rendered as a dim "(no content)"
+    // line so the user sees the slash actually executed and produced
+    // nothing instead of a totally blank chat row.
+    const hasAny = view.stdout.length > 0 || view.stderr.length > 0
+    return (
+      <box paddingTop={1} flexDirection="column">
+        {hasAny ? (
+          <>
+            {view.stdout ? (
+              <box flexDirection="row">
+                <text fg={theme.textMuted}>{"  ⎿  "}</text>
+                <box flexGrow={1}>
+                  <text fg={theme.text}>{view.stdout}</text>
+                </box>
+              </box>
+            ) : null}
+            {view.stderr ? (
+              <box flexDirection="row">
+                <text fg={theme.textMuted}>{"  ⎿  "}</text>
+                <box flexGrow={1}>
+                  <text fg={theme.error}>{view.stderr}</text>
+                </box>
+              </box>
+            ) : null}
+          </>
+        ) : (
+          <text fg={theme.textMuted}>(no content)</text>
+        )}
+      </box>
+    )
+  }
   return (
     <box paddingTop={1} flexDirection="row" gap={1}>
       <text fg={theme.accent} attributes={TextAttributes.BOLD}>
         &gt;
       </text>
       <box flexGrow={1}>
-        <text fg={theme.text}>{props.text}</text>
+        <text fg={theme.text}>{view.text}</text>
       </box>
     </box>
   )
