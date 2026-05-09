@@ -202,7 +202,18 @@ function listLocalBranches(repo: string): string[] {
  *
  * `tab` switches focus; `enter` on the last field commits.
  */
-function NewTaskDialog(props: { onSubmit: (v: NewTaskInput) => void; onCancel: () => void; defaultRepo: string }) {
+function NewTaskDialog(props: {
+  onSubmit: (v: NewTaskInput) => void
+  onCancel: () => void
+  defaultRepo: string
+  /**
+   * User-curated repo list, persisted via `/add-repo`. Surfaced in the
+   * dialog as a picker beneath the repo input. The current launch
+   * directory (`defaultRepo`) is always prepended so the user can pick
+   * "where I started kobe" without having to add it first.
+   */
+  savedRepos: readonly string[]
+}) {
   const dialog = useDialog()
   const { theme } = useTheme()
   const [field, setField] = createSignal<"prompt" | "repo" | "baseRef">("prompt")
@@ -210,20 +221,78 @@ function NewTaskDialog(props: { onSubmit: (v: NewTaskInput) => void; onCancel: (
   const [repo, setRepo] = createSignal(props.defaultRepo)
   const [baseRef, setBaseRef] = createSignal(DEFAULT_BASE_REF)
 
+  // Repo picker — `defaultRepo` (cwd at launch) always appears first;
+  // user-saved repos follow, deduped against the cwd. Up/down on the
+  // repo field navigates this list and pre-fills the input so `enter`
+  // commits the highlighted choice. Free-text editing is still allowed
+  // — the picker is an affordance, not a constraint.
+  const repoOptions = createMemo<readonly string[]>(() => {
+    const seen = new Set<string>()
+    const out: string[] = []
+    for (const p of [props.defaultRepo, ...props.savedRepos]) {
+      const t = p.trim()
+      if (!t || seen.has(t)) continue
+      seen.add(t)
+      out.push(t)
+    }
+    return out
+  })
+  // Substring filter against the repo input. Case-insensitive; empty
+  // input returns the full list. The picker is augmenting the input,
+  // not gating it, so an exact-match input still appears in the list.
+  const repoFiltered = createMemo<readonly string[]>(() => {
+    const all = repoOptions()
+    const q = repo().trim().toLowerCase()
+    if (!q) return all
+    return all.filter((p) => p.toLowerCase().includes(q))
+  })
+  const [repoCursor, setRepoCursor] = createSignal(0)
+
   // Branch picker — refreshed whenever the repo path changes. The
   // baseRef field still accepts free text (so tags / commit SHAs / refs
   // not in the local branch list still work), but typing is augmented
   // with up/down navigation over the discovered branches: highlights
   // the cursor row and pre-fills the input as the user moves.
   const branches = createMemo<readonly string[]>(() => listLocalBranches(repo().trim()))
+  // Type-to-filter on the baseRef input. Same rules as the repo
+  // filter — empty query returns everything; non-empty does a
+  // case-insensitive substring match.
+  const branchFiltered = createMemo<readonly string[]>(() => {
+    const all = branches()
+    const q = baseRef().trim().toLowerCase()
+    if (!q) return all
+    return all.filter((b) => b.toLowerCase().includes(q))
+  })
   const [branchCursor, setBranchCursor] = createSignal(0)
 
-  // Reset the cursor whenever the branch list changes (repo edit) so we
-  // don't index off the end after a smaller-list refresh.
+  // Reset cursors whenever the filtered list changes — typing should
+  // always land the highlight on the first match, otherwise the cursor
+  // can sit on a now-hidden index and feels broken.
   createEffect(() => {
-    void branches()
+    void branchFiltered()
     setBranchCursor(0)
   })
+  createEffect(() => {
+    void repoFiltered()
+    setRepoCursor(0)
+  })
+
+  // Picker windowing — same shape as the slash dropdown's `slashWindow`
+  // (src/tui/panes/chat/Composer.tsx). Caps visible rows so a repo with
+  // 80+ branches doesn't push the rest of the dialog off-screen; the
+  // window scrolls to keep the cursor in view.
+  const PICKER_MAX_VISIBLE = 8
+  type PickerWindow = { items: readonly string[]; start: number; total: number }
+  function windowAround(list: readonly string[], cursor: number): PickerWindow {
+    const total = list.length
+    if (total <= PICKER_MAX_VISIBLE) return { items: list, start: 0, total }
+    const half = Math.floor(PICKER_MAX_VISIBLE / 2)
+    let start = Math.max(0, cursor - half)
+    if (start + PICKER_MAX_VISIBLE > total) start = total - PICKER_MAX_VISIBLE
+    return { items: list.slice(start, start + PICKER_MAX_VISIBLE), start, total }
+  }
+  const repoWindow = createMemo<PickerWindow>(() => windowAround(repoFiltered(), repoCursor()))
+  const branchWindow = createMemo<PickerWindow>(() => windowAround(branchFiltered(), branchCursor()))
 
   function commit() {
     const p = prompt().trim()
@@ -247,32 +316,46 @@ function NewTaskDialog(props: { onSubmit: (v: NewTaskInput) => void; onCancel: (
             return "prompt"
           }),
       },
-      // Branch list nav — only fires when on the baseRef field AND
-      // there's at least one branch to navigate. up/down move the
-      // cursor; pressing them also pre-fills the input with the
-      // highlighted branch so `enter` commits with that value.
+      // up/down are field-scoped: on the repo field they navigate the
+      // saved-repos picker; on the baseRef field they navigate the
+      // branch picker. Both pre-fill the input so `enter` commits the
+      // highlighted choice. Free-text editing remains available in
+      // either field.
       {
         key: "up",
         cmd: () => {
+          if (field() === "repo") {
+            const list = repoFiltered()
+            if (list.length === 0) return
+            const next = Math.max(0, repoCursor() - 1)
+            setRepoCursor(next)
+            // Don't pre-fill the input on arrow nav — that would
+            // collapse the filter to whatever the cursor is on and
+            // jump the list. Selection happens on enter / click.
+            return
+          }
           if (field() !== "baseRef") return
-          const list = branches()
+          const list = branchFiltered()
           if (list.length === 0) return
           const next = Math.max(0, branchCursor() - 1)
           setBranchCursor(next)
-          const sel = list[next]
-          if (sel) setBaseRef(sel)
         },
       },
       {
         key: "down",
         cmd: () => {
+          if (field() === "repo") {
+            const list = repoFiltered()
+            if (list.length === 0) return
+            const next = Math.min(list.length - 1, repoCursor() + 1)
+            setRepoCursor(next)
+            return
+          }
           if (field() !== "baseRef") return
-          const list = branches()
+          const list = branchFiltered()
           if (list.length === 0) return
           const next = Math.min(list.length - 1, branchCursor() + 1)
           setBranchCursor(next)
-          const sel = list[next]
-          if (sel) setBaseRef(sel)
         },
       },
     ],
@@ -317,11 +400,54 @@ function NewTaskDialog(props: { onSubmit: (v: NewTaskInput) => void; onCancel: (
               setField("prompt")
               return
             }
+            // If the picker has a highlighted match, prefer it over
+            // the typed text (matches the branch field's behavior).
+            const list = repoFiltered()
+            const picked = list[repoCursor()]
+            if (picked) setRepo(picked)
             if (!repo().trim()) return
             commit()
           }}
         />
       </box>
+      {/* Repo picker: rendered when the repo field is focused. Lists
+          the launch cwd plus user-saved repos (`/add-repo`), filtered
+          by what the user types. Up/down navigate, click selects. */}
+      <Show when={field() === "repo" && repoFiltered().length > 0}>
+        <box gap={0} paddingLeft={2} paddingBottom={1}>
+          <Show when={repoWindow().start > 0}>
+            <text fg={theme.textMuted} wrapMode="none">
+              ↑ {repoWindow().start} more
+            </text>
+          </Show>
+          <For each={repoWindow().items}>
+            {(path, i) => {
+              const absoluteIndex = () => repoWindow().start + i()
+              const isCursor = () => absoluteIndex() === repoCursor()
+              const isSelected = () => repo().trim() === path
+              return (
+                <text
+                  fg={isCursor() ? theme.primary : isSelected() ? theme.accent : theme.textMuted}
+                  attributes={isCursor() ? TextAttributes.BOLD : undefined}
+                  wrapMode="none"
+                  onMouseUp={() => {
+                    setRepo(path)
+                    setRepoCursor(absoluteIndex())
+                  }}
+                >
+                  {isCursor() ? "▸ " : "  "}
+                  {path}
+                </text>
+              )
+            }}
+          </For>
+          <Show when={repoWindow().start + repoWindow().items.length < repoWindow().total}>
+            <text fg={theme.textMuted} wrapMode="none">
+              ↓ {repoWindow().total - repoWindow().start - repoWindow().items.length} more
+            </text>
+          </Show>
+        </box>
+      </Show>
       <box gap={0}>
         <text fg={field() === "baseRef" ? theme.accent : theme.textMuted}>from branch</text>
         <input
@@ -329,18 +455,33 @@ function NewTaskDialog(props: { onSubmit: (v: NewTaskInput) => void; onCancel: (
           placeholder={DEFAULT_BASE_REF}
           focused={field() === "baseRef"}
           onInput={(v: string) => setBaseRef(v)}
-          onSubmit={() => commit()}
+          onSubmit={() => {
+            // Prefer the highlighted branch in the picker over the
+            // typed text. Free-text only kicks in when nothing matches
+            // (typed a tag / commit SHA the local branch list doesn't know).
+            const list = branchFiltered()
+            const picked = list[branchCursor()]
+            if (picked) setBaseRef(picked)
+            commit()
+          }}
         />
       </box>
       {/* Branch picker: rendered when on baseRef field and the repo
-          actually has discoverable local branches. Up/down navigate
-          (handler in useBindings above pre-fills the input as cursor
-          moves); click selects + commits. */}
-      <Show when={field() === "baseRef" && branches().length > 0}>
+          actually has discoverable branches matching the input. Up/down
+          navigate the (windowed) list; click selects + commits. The
+          ↑/↓ N more indicators surface truncation when the repo has
+          more matching branches than the cap. */}
+      <Show when={field() === "baseRef" && branchFiltered().length > 0}>
         <box gap={0} paddingLeft={2} paddingBottom={1}>
-          <For each={branches()}>
+          <Show when={branchWindow().start > 0}>
+            <text fg={theme.textMuted} wrapMode="none">
+              ↑ {branchWindow().start} more
+            </text>
+          </Show>
+          <For each={branchWindow().items}>
             {(name, i) => {
-              const isCursor = () => i() === branchCursor()
+              const absoluteIndex = () => branchWindow().start + i()
+              const isCursor = () => absoluteIndex() === branchCursor()
               const isSelected = () => baseRef().trim() === name
               return (
                 <text
@@ -349,7 +490,7 @@ function NewTaskDialog(props: { onSubmit: (v: NewTaskInput) => void; onCancel: (
                   wrapMode="none"
                   onMouseUp={() => {
                     setBaseRef(name)
-                    setBranchCursor(i())
+                    setBranchCursor(absoluteIndex())
                     commit()
                   }}
                 >
@@ -359,20 +500,34 @@ function NewTaskDialog(props: { onSubmit: (v: NewTaskInput) => void; onCancel: (
               )
             }}
           </For>
+          <Show when={branchWindow().start + branchWindow().items.length < branchWindow().total}>
+            <text fg={theme.textMuted} wrapMode="none">
+              ↓ {branchWindow().total - branchWindow().start - branchWindow().items.length} more
+            </text>
+          </Show>
         </box>
       </Show>
       <box paddingBottom={1}>
-        <text fg={theme.textMuted}>tab fields · ↑↓ pick branch · enter create · esc cancel</text>
+        <text fg={theme.textMuted}>tab fields · type to filter · ↑↓ pick · enter create · esc cancel</text>
       </box>
     </box>
   )
 }
 
-function showNewTaskDialog(dialog: DialogContext, defaultRepo: string): Promise<NewTaskInput | undefined> {
+function showNewTaskDialog(
+  dialog: DialogContext,
+  defaultRepo: string,
+  savedRepos: readonly string[],
+): Promise<NewTaskInput | undefined> {
   return new Promise<NewTaskInput | undefined>((resolve) => {
     dialog.replace(
       () => (
-        <NewTaskDialog defaultRepo={defaultRepo} onSubmit={(v) => resolve(v)} onCancel={() => resolve(undefined)} />
+        <NewTaskDialog
+          defaultRepo={defaultRepo}
+          savedRepos={savedRepos}
+          onSubmit={(v) => resolve(v)}
+          onCancel={() => resolve(undefined)}
+        />
       ),
       () => resolve(undefined),
     )
@@ -392,14 +547,32 @@ export type AppDeps = {
 /* --------------------------------------------------------------------- */
 function PaneHeader(props: { title: string; subtitle?: string; focused?: boolean }) {
   const { theme } = useTheme()
-  // Focused panes get the primary accent color in their title; others
-  // dim to textMuted so the eye locates the active pane immediately.
-  const titleColor = () => (props.focused === false ? theme.textMuted : theme.primary)
+  // Focused panes use `theme.success` (green) — the rest of the focus
+  // affordance system (resize edges, status bar) already uses green for
+  // "active." Picking the same hue here unifies the language so a
+  // glance anywhere on screen confirms which pane has focus. Blue
+  // (theme.primary) was reserved for branding/links and getting
+  // confused with focus state, especially on terminals where blue
+  // tends to look mid-saturation against the pane background.
+  //
+  // The leading `▌` block character in green is the additional
+  // visibility hammer the prior bold-blue title was missing — it
+  // attaches the focus signal to the title visually so the user's eye
+  // doesn't have to scan the whole screen to pick up the active pane.
+  const focused = () => props.focused !== false
+  const titleColor = () => (focused() ? theme.success : theme.textMuted)
   return (
     <box flexDirection="row" justifyContent="space-between" flexShrink={0} paddingLeft={1} paddingRight={1}>
-      <text fg={titleColor()} attributes={TextAttributes.BOLD} wrapMode="none">
-        {props.title}
-      </text>
+      <box flexDirection="row" gap={1} flexShrink={1}>
+        <Show when={focused()} fallback={<text fg={theme.textMuted}>{" "}</text>}>
+          <text fg={theme.success} attributes={TextAttributes.BOLD} wrapMode="none">
+            ▌
+          </text>
+        </Show>
+        <text fg={titleColor()} attributes={TextAttributes.BOLD} wrapMode="none">
+          {props.title}
+        </text>
+      </box>
       <Show when={props.subtitle}>
         <text fg={theme.textMuted} wrapMode="none">
           {props.subtitle}
@@ -821,6 +994,17 @@ function Shell(props: AppDeps) {
     kv.set("centerTabsByTask", obj)
   })
 
+  // Saved repos — populated by the `kobe add [path]` CLI subcommand
+  // (src/cli/index.ts), read here for the new-task dialog's repo
+  // picker. Reading through a memo over kv.store keeps the picker
+  // reactive on the same kobe instance. Defensive filter in case the
+  // on-disk file was hand-edited to a non-array.
+  const savedRepos = createMemo<readonly string[]>(() => {
+    const raw = kv.get("savedRepos", [])
+    if (!Array.isArray(raw)) return []
+    return raw.filter((s): s is string => typeof s === "string")
+  })
+
   useKobeKeybindings({
     onShowHelp: () => HelpDialog.show(dialog),
     // When the chat composer is the active input (workspace focused),
@@ -832,7 +1016,7 @@ function Shell(props: AppDeps) {
   // Shared "open new-task dialog and create" handler. Bound to two
   // keys with different `enabled` guards (see useBindings calls below).
   async function openNewTaskFlow(): Promise<void> {
-    const result = await showNewTaskDialog(dialog, process.cwd())
+    const result = await showNewTaskDialog(dialog, process.cwd(), savedRepos())
     if (!result) return
     try {
       // Per the Wave 3 G pivot: we pass the prompt through and let
