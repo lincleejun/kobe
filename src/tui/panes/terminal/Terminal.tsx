@@ -204,7 +204,8 @@ export function Terminal(props: TerminalProps): JSXElement {
       borderColor={focused() ? theme.borderActive : theme.border}
       onMouseUp={() => setFocusedLocal(true)}
     >
-      {/* Header */}
+      {/* Header (the parent PaneHeader already labels TERMINAL; this
+          row keeps the worktree-id detail Stream J shipped). */}
       <box flexDirection="row" flexShrink={0} paddingLeft={1} paddingRight={1}>
         <text fg={theme.text} attributes={TextAttributes.BOLD} wrapMode="none">
           {headerLabel()}

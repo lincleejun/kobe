@@ -169,22 +169,21 @@ export function Sidebar(props: SidebarProps) {
 
   return (
     <box
-      backgroundColor={theme.backgroundPanel}
       width={SIDEBAR_WIDTH}
-      height="100%"
+      flexShrink={0}
+      flexDirection="column"
       paddingTop={1}
       paddingBottom={1}
       paddingLeft={2}
       paddingRight={2}
     >
-      {/* Header: "kobe" + version. Lifts the look-and-feel of the
-         primitive's header but adds a version label so the user can tell
-         which build is running. */}
-      <box flexDirection="row" justifyContent="space-between" paddingBottom={1}>
-        <text fg={theme.text} attributes={TextAttributes.BOLD} wrapMode="none">
+      {/* Header: just "kobe". The previous version label was visual
+         clutter — it changes per-build, doesn't help the user navigate,
+         and there's a CLAUDE.md file at the repo root for builds. */}
+      <box flexDirection="row" paddingBottom={1}>
+        <text fg={theme.primary} attributes={TextAttributes.BOLD} wrapMode="none">
           kobe
         </text>
-        <text fg={theme.textMuted} wrapMode="none">{`v${KOBE_VERSION}`}</text>
       </box>
 
       {/* Body: scrollable group/task list. Stretching with flexGrow so
@@ -193,8 +192,9 @@ export function Sidebar(props: SidebarProps) {
         flexGrow={1}
         verticalScrollbarOptions={{
           trackOptions: {
-            backgroundColor: theme.background,
-            foregroundColor: theme.borderActive,
+            // Transparent track + thumb → invisible scrollbar; still
+            // scrollable but doesn't clutter the see-through aesthetic.
+            foregroundColor: "transparent",
           },
         }}
       >

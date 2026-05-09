@@ -232,14 +232,7 @@ function PaneHeader(props: { title: string; subtitle?: string; focused?: boolean
   // dim to textMuted so the eye locates the active pane immediately.
   const titleColor = () => (props.focused === false ? theme.textMuted : theme.primary)
   return (
-    <box
-      flexDirection="row"
-      justifyContent="space-between"
-      flexShrink={0}
-      paddingLeft={1}
-      paddingRight={1}
-      backgroundColor={theme.backgroundPanel}
-    >
+    <box flexDirection="row" justifyContent="space-between" flexShrink={0} paddingLeft={1} paddingRight={1}>
       <text fg={titleColor()} attributes={TextAttributes.BOLD} wrapMode="none">
         {props.title}
       </text>
@@ -270,18 +263,17 @@ type PaneId = "sidebar" | "workspace" | "files" | "terminal"
 const PANE_ORDER = ["sidebar", "workspace", "files", "terminal"] as const satisfies readonly PaneId[]
 
 /**
- * `[Key]` chip — agent-deck-style key affordance. Key is BOLD inside a
- * tinted background block; label sits next to it in muted text.
+ * `[Key]` chip — agent-deck-style key affordance. The key is wrapped in
+ * literal brackets in BOLD accent color; label follows in muted text.
+ * No filled background → terminal shows through.
  */
 function Hotkey(props: { keys: string; label: string }) {
   const { theme } = useTheme()
   return (
     <box flexDirection="row" gap={1} flexShrink={0}>
-      <box paddingLeft={1} paddingRight={1} backgroundColor={theme.backgroundElement} flexShrink={0}>
-        <text fg={theme.text} attributes={TextAttributes.BOLD} wrapMode="none">
-          {props.keys}
-        </text>
-      </box>
+      <text fg={theme.accent} attributes={TextAttributes.BOLD} wrapMode="none">
+        [{props.keys}]
+      </text>
       <text fg={theme.textMuted} wrapMode="none">
         {props.label}
       </text>
@@ -308,14 +300,7 @@ function StatusBar(props: { focusedPane: PaneId }) {
     }
   }
   return (
-    <box
-      flexDirection="row"
-      justifyContent="space-between"
-      flexShrink={0}
-      paddingLeft={1}
-      paddingRight={1}
-      backgroundColor={theme.backgroundPanel}
-    >
+    <box flexDirection="row" justifyContent="space-between" flexShrink={0} paddingLeft={1} paddingRight={1}>
       {/* Left: section label + pane-local hotkeys */}
       <box flexDirection="row" gap={2} flexShrink={1}>
         <text fg={theme.primary} attributes={TextAttributes.BOLD} wrapMode="none">
@@ -356,7 +341,7 @@ function StatusBar(props: { focusedPane: PaneId }) {
 function TopBar(props: { activeTitle?: string }) {
   const { theme } = useTheme()
   return (
-    <box flexDirection="row" paddingLeft={1} paddingRight={1} flexShrink={0} backgroundColor={theme.backgroundPanel}>
+    <box flexDirection="row" paddingLeft={1} paddingRight={1} flexShrink={0}>
       <text fg={theme.primary} attributes={TextAttributes.BOLD}>
         kobe
       </text>
