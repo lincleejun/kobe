@@ -20,9 +20,9 @@
  */
 
 import { TextAttributes } from "@opentui/core"
-import { For, Show, createSignal } from "solid-js"
-import { useTheme } from "../context/theme"
+import { For, Show, createMemo, createSignal } from "solid-js"
 import type { KVContext } from "../context/kv"
+import { useTheme } from "../context/theme"
 import { useBindings } from "../lib/keymap"
 import { type DialogContext, useDialog } from "../ui/dialog"
 import { DialogConfirm } from "../ui/dialog-confirm"
@@ -41,14 +41,38 @@ export type SettingsDialogProps = {
 
 export function SettingsDialog(props: SettingsDialogProps) {
   const dialog = useDialog()
-  const { theme } = useTheme()
+  const themeCtx = useTheme()
+  const { theme } = themeCtx
   const [section, setSection] = createSignal<SectionId>("general")
   const [cursor, setCursor] = createSignal(0)
 
+  // Theme picker state — separate cursor from section sidebar's. Defaults
+  // to the currently-active theme so an immediate enter is a no-op rather
+  // than a surprise switch.
+  const themeNames = createMemo<readonly string[]>(() => themeCtx.all().slice().sort())
+  const [themeCursor, setThemeCursor] = createSignal(
+    Math.max(
+      0,
+      themeNames().findIndex((n) => n === themeCtx.selected),
+    ),
+  )
+
   function moveCursor(delta: number): void {
+    if (section() === "general") {
+      // Theme list nav.
+      const len = themeNames().length
+      if (len === 0) return
+      setThemeCursor((c) => (c + delta + len) % len)
+      return
+    }
     setCursor((c) => (c + delta + SECTIONS.length) % SECTIONS.length)
     const next = SECTIONS[cursor()]
     if (next) setSection(next.id)
+  }
+
+  function switchSection(id: SectionId): void {
+    setSection(id)
+    setCursor(SECTIONS.findIndex((s) => s.id === id))
   }
 
   // Confirm before wiping KV — the user explicitly asked for it but
@@ -75,12 +99,29 @@ export function SettingsDialog(props: SettingsDialogProps) {
       { key: "j", cmd: () => moveCursor(1) },
       { key: "k", cmd: () => moveCursor(-1) },
       { key: "tab", cmd: () => moveCursor(1) },
-      // `enter` activates the only actionable thing in the current
-      // section. General has nothing; Dev has the reset row.
+      // `enter` activates the focused row in the current section.
+      // General → set theme to the highlighted entry. Dev → reset.
       {
         key: "return",
         cmd: () => {
+          if (section() === "general") {
+            const name = themeNames()[themeCursor()]
+            if (name) themeCtx.set(name)
+            return
+          }
           if (section() === "dev") void confirmReset()
+        },
+      },
+      // Left/right jumps focus between section sidebar and section
+      // body — useful when a list is open and the user wants to pop
+      // back to switching sections without using j/k.
+      {
+        key: "left",
+        cmd: () => {
+          // Moving left from any section returns focus to the section
+          // sidebar — repurpose `cursor` as the active sidebar row.
+          setSection("general")
+          setCursor(0)
         },
       },
     ],
@@ -108,10 +149,7 @@ export function SettingsDialog(props: SettingsDialogProps) {
                   paddingLeft={1}
                   paddingRight={1}
                   backgroundColor={active() ? theme.primary : undefined}
-                  onMouseUp={() => {
-                    setCursor(i())
-                    setSection(s.id)
-                  }}
+                  onMouseUp={() => switchSection(s.id)}
                 >
                   <text
                     fg={active() ? theme.selectedListItemText : theme.text}
@@ -128,8 +166,44 @@ export function SettingsDialog(props: SettingsDialogProps) {
         {/* Section content */}
         <box flexGrow={1} flexShrink={1} flexDirection="column" gap={1}>
           <Show when={section() === "general"}>
-            <box paddingTop={0}>
-              <text fg={theme.textMuted}>Nothing here yet.</text>
+            <box flexDirection="column" gap={1}>
+              <text fg={theme.text} attributes={TextAttributes.BOLD}>
+                Theme
+              </text>
+              <text fg={theme.textMuted}>
+                ↑↓ to highlight, enter to apply. `transparent` lets the host terminal's bg / image / opacity show
+                through.
+              </text>
+              <box flexDirection="column" gap={0}>
+                <For each={themeNames()}>
+                  {(name, i) => {
+                    const isCursor = () => i() === themeCursor()
+                    const isSelected = () => name === themeCtx.selected
+                    return (
+                      <box
+                        flexDirection="row"
+                        gap={1}
+                        paddingLeft={1}
+                        paddingRight={1}
+                        backgroundColor={isCursor() ? theme.primary : undefined}
+                        onMouseUp={() => {
+                          setThemeCursor(i())
+                          themeCtx.set(name)
+                        }}
+                      >
+                        <text
+                          fg={isCursor() ? theme.selectedListItemText : isSelected() ? theme.accent : theme.text}
+                          attributes={isCursor() || isSelected() ? TextAttributes.BOLD : undefined}
+                          wrapMode="none"
+                        >
+                          {isSelected() ? "● " : "  "}
+                          {name}
+                        </text>
+                      </box>
+                    )
+                  }}
+                </For>
+              </box>
             </box>
           </Show>
           <Show when={section() === "dev"}>

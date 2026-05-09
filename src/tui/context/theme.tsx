@@ -32,6 +32,7 @@ import nord from "./theme/nord.json" with { type: "json" }
 import opencode from "./theme/opencode.json" with { type: "json" }
 import osakaJade from "./theme/osaka-jade.json" with { type: "json" }
 import tokyonight from "./theme/tokyonight.json" with { type: "json" }
+import transparent from "./theme/transparent.json" with { type: "json" }
 
 type HexColor = `#${string}`
 type RefName = string
@@ -83,6 +84,11 @@ const BUNDLED_THEMES: Record<string, ThemeJson> = {
   dracula: dracula as ThemeJson,
   tokyonight: tokyonight as ThemeJson,
   "osaka-jade": osakaJade as ThemeJson,
+  // `transparent` is a kobe-only theme: tokyonight palette but
+  // `background = transparent`, so the host terminal's bg / image /
+  // opacity setting shows through. Panel + element tones stay opaque
+  // so chrome (sidebar, composer fill, dropdowns) keeps contrast.
+  transparent: transparent as ThemeJson,
 }
 
 type State = {

@@ -768,9 +768,23 @@ function TopBar(props: {
 }
 
 function Shell(props: AppDeps) {
-  const { theme } = useTheme()
+  const themeCtx = useTheme()
+  const { theme } = themeCtx
   const dialog = useDialog()
   const kv = useKV()
+
+  // Theme persistence — on mount, hydrate from KV (validates the
+  // stored name against the bundled list to drop stale entries from a
+  // theme that was renamed). On every theme switch, persist the new
+  // name. ThemeProvider is mounted OUTER of KVProvider, so we hydrate
+  // here rather than inside ThemeProvider's init.
+  const persistedTheme = kv.get("activeTheme")
+  if (typeof persistedTheme === "string" && themeCtx.has(persistedTheme)) {
+    themeCtx.set(persistedTheme)
+  }
+  createEffect(() => {
+    kv.set("activeTheme", themeCtx.selected)
+  })
 
   const tasksAcc: Accessor<ReturnType<typeof props.orchestrator.listTasks>> = props.orchestrator.tasksSignal()
   // Persisted across runs in `~/.config/kobe/state.json` via the KV store
