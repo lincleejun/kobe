@@ -102,6 +102,9 @@ export type TaskPtyOpts = {
 /** Listener for new pane snapshots. Receives the full visible pane on each tick. */
 export type DataListener = (snapshot: string) => void
 
+/** Cursor position within the visible pane, 0-based. */
+export type CursorPos = { x: number; y: number }
+
 /**
  * Common surface every backend implements. The Solid component
  * `Terminal.tsx` only ever sees this shape, so the backend can be
@@ -126,6 +129,13 @@ export interface TaskPtyLike {
 
   /** Capture the current visible scrollback as plain text. */
   capture(): string
+
+  /**
+   * Capture the visible-pane cursor position, 0-based. Returns null
+   * when the backend can't report (mocks default to null; consumers
+   * just don't render a cursor in that case).
+   */
+  captureCursor(): CursorPos | null
 
   /** Tear the shell down. Idempotent. */
   kill(): void
@@ -395,6 +405,41 @@ export class TmuxTaskPty implements TaskPtyLike {
     return tmuxSync(this.tmuxBin, ["capture-pane", "-p", "-J", "-t", this.sessionName])
   }
 
+  /**
+   * Ask tmux for the cursor's pane-relative coordinates. tmux's
+   * `display-message -p -F` interpolates the format spec against the
+   * target session — `cursor_x` and `cursor_y` are 0-based and align
+   * with what `capture-pane` returned (visible pane row/col), so the
+   * renderer can overlay a cursor at `lines[y][x]` directly when
+   * scroll offset is 0.
+   */
+  captureCursor(): CursorPos | null {
+    if (this._killed) return null
+    try {
+      const out = tmuxSync(this.tmuxBin, [
+        "display-message",
+        "-p",
+        "-t",
+        this.sessionName,
+        "-F",
+        "#{cursor_x} #{cursor_y}",
+      ])
+      const trimmed = out.trim()
+      if (!trimmed) return null
+      const parts = trimmed.split(/\s+/)
+      if (parts.length < 2) return null
+      const xPart = parts[0]
+      const yPart = parts[1]
+      if (xPart === undefined || yPart === undefined) return null
+      const x = Number.parseInt(xPart, 10)
+      const y = Number.parseInt(yPart, 10)
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return null
+      return { x, y }
+    } catch {
+      return null
+    }
+  }
+
   kill(): void {
     if (this._killed) return
     this.markDead()
@@ -436,6 +481,7 @@ export class MockTaskPty implements TaskPtyLike {
   private _killed = false
   private _cols: number
   private _rows: number
+  private _cursor: CursorPos | null = null
 
   constructor(opts: TaskPtyOpts) {
     this.taskId = opts.taskId
@@ -498,6 +544,16 @@ export class MockTaskPty implements TaskPtyLike {
 
   capture(): string {
     return this.buffer
+  }
+
+  /** Tests can stash a synthetic cursor for the renderer to overlay. */
+  setCursor(pos: CursorPos | null): void {
+    this._cursor = pos
+  }
+
+  captureCursor(): CursorPos | null {
+    if (this._killed) return null
+    return this._cursor
   }
 
   kill(): void {

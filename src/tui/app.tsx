@@ -457,10 +457,13 @@ function StatusBar() {
           <Match when={focus.focused() === "sidebar"}>
             <Hotkey keys="j/k" label="nav" />
             <Hotkey keys="enter" label="select" />
+            <Hotkey keys="a" label="archive" />
+            <Hotkey keys="[/]" label="view" />
             <Hotkey keys="d" label="delete" />
           </Match>
           <Match when={focus.focused() === "workspace"}>
             <Hotkey keys="enter" label="send" />
+            <Hotkey keys="ctrl+q" label="back to sidebar" />
           </Match>
           <Match when={focus.focused() === "files"}>
             <Hotkey keys="j/k" label="nav" />
@@ -627,6 +630,12 @@ function Shell(props: AppDeps) {
       { key: "ctrl+2", cmd: () => setFocusedPane("workspace") },
       { key: "ctrl+3", cmd: () => setFocusedPane("files") },
       { key: "ctrl+4", cmd: () => setFocusedPane("terminal") },
+      // ctrl+q "detach": from any pane, jump back to the sidebar without
+      // pausing the chat. The orchestrator's pump runs independently of
+      // focus, so the engine keeps streaming while the user navigates
+      // tasks. Wave 4.5 — Jackson's request for "detach but keep
+      // working" semantics from inside the composer.
+      { key: "ctrl+q", cmd: () => setFocusedPane("sidebar") },
     ],
   }))
 
@@ -1006,9 +1015,6 @@ function Shell(props: AppDeps) {
             flexBasis={0}
             flexDirection="column"
             onMouseUp={() => setFocusedPane("files")}
-            border={["bottom"]}
-            customBorderChars={HSplitBorder.customBorderChars}
-            borderColor={isFocused("files")() ? theme.success : theme.border}
           >
             <PaneHeader title="FILES" focused={focusedPane() === "files"} />
             <box flexGrow={1}>
@@ -1021,6 +1027,8 @@ function Shell(props: AppDeps) {
             flexBasis={0}
             flexDirection="column"
             onMouseUp={() => setFocusedPane("terminal")}
+            border={["top"]}
+            customBorderChars={HSplitBorder.customBorderChars}
             borderColor={isFocused("terminal")() ? theme.success : theme.border}
           >
             <PaneHeader

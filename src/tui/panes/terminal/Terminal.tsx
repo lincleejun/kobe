@@ -46,11 +46,21 @@
 
 import { basename } from "node:path"
 import { TextAttributes } from "@opentui/core"
-import { type Accessor, type JSXElement, Show, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js"
+import {
+  type Accessor,
+  For,
+  type JSXElement,
+  Show,
+  createEffect,
+  createMemo,
+  createSignal,
+  on,
+  onCleanup,
+} from "solid-js"
 import { stripAnsi } from "../../../../test/behavior/screen"
 import { useTheme } from "../../context/theme"
 import { useTerminalBindings } from "./keys"
-import type { TaskPty } from "./pty"
+import type { CursorPos, TaskPty } from "./pty"
 import { PtyRegistry } from "./registry"
 
 /* --------------------------------------------------------------------- */
@@ -118,6 +128,9 @@ export function Terminal(props: TerminalProps): JSXElement {
   // Latest plain-text snapshot from the PTY.
   const [snapshot, setSnapshot] = createSignal<string>("")
 
+  // Latest cursor position from the PTY (null when backend can't report).
+  const [cursor, setCursor] = createSignal<CursorPos | null>(null)
+
   // Scroll offset: 0 = follow bottom; positive = N lines back into history.
   const [scrollOffset, setScrollOffset] = createSignal(0)
 
@@ -128,6 +141,7 @@ export function Terminal(props: TerminalProps): JSXElement {
       if (!cwd || !taskId) {
         setPty(null)
         setSnapshot("")
+        setCursor(null)
         return
       }
       const reg = registry()
@@ -136,9 +150,21 @@ export function Terminal(props: TerminalProps): JSXElement {
       // Reset scroll on task switch — every task gets its own viewport.
       setScrollOffset(0)
 
+      // Refresh cursor whenever a fresh snapshot arrives. tmux's cursor
+      // moves on every shell input/echo, so coupling it to the snapshot
+      // tick keeps text + cursor visually in sync without a second timer.
+      const refreshCursor = () => {
+        try {
+          setCursor(handle.captureCursor())
+        } catch {
+          setCursor(null)
+        }
+      }
+
       // Subscribe; unsubscribe on cleanup OR when the effect re-runs.
       const unsubscribe = handle.onData((snap) => {
         setSnapshot(stripAnsi(snap))
+        refreshCursor()
       })
       // If the pty already had a buffer, capture it once so we render
       // immediately without waiting for the first poll tick.
@@ -148,6 +174,7 @@ export function Terminal(props: TerminalProps): JSXElement {
       } catch {
         /* capture can fail on a freshly-spawned tmux pane; ignore */
       }
+      refreshCursor()
       onCleanup(() => {
         unsubscribe()
       })
@@ -197,6 +224,11 @@ export function Terminal(props: TerminalProps): JSXElement {
     return all.slice(0, cut)
   })
 
+  // Cursor is only meaningful when we're following the bottom of the
+  // buffer; once the user scrolls back, the cursor's reported (x,y)
+  // refers to the *live* viewport, not what's currently rendered.
+  const showCursor = createMemo(() => focused() && scrollOffset() === 0 && cursor() !== null)
+
   return (
     <box
       flexDirection="column"
@@ -226,20 +258,59 @@ export function Terminal(props: TerminalProps): JSXElement {
           </box>
         }
       >
-        <box flexGrow={1} paddingLeft={1} paddingRight={1}>
-          {/* v1 renders the visible scrollback as a single multi-line
-              `<text>`. opentui's text renderable handles `\n`-broken
-              content with `wrapMode="none"`. We tried a `<For>` over
-              one-`<text>`-per-line earlier and observed render glitches
-              inside `<scrollbox>` (lines never appeared even with the
-              snapshot signal updating). The single-`<text>` path is
-              the reliable one for plain-text scrollback; if/when we
-              upgrade to ANSI-aware rendering we'll revisit. */}
-          <text fg={theme.text} wrapMode="none">
-            {visibleLines().join("\n")}
-          </text>
+        <box flexGrow={1} flexDirection="column" paddingLeft={1} paddingRight={1}>
+          <For each={visibleLines()}>
+            {(line, i) => {
+              const isCursorLine = () => showCursor() && cursor()?.y === i()
+              return (
+                <Show
+                  when={isCursorLine()}
+                  fallback={
+                    <text fg={theme.text} wrapMode="none">
+                      {line}
+                    </text>
+                  }
+                >
+                  <CursorLine line={line} cursorX={cursor()?.x ?? 0} />
+                </Show>
+              )
+            }}
+          </For>
         </box>
       </Show>
+    </box>
+  )
+}
+
+/**
+ * Renders a single scrollback line that contains the pty cursor.
+ * Splits the line into three text spans (pre / cursor-char / post) so
+ * the cursor cell can carry the INVERSE attribute — that produces the
+ * familiar block-cursor look without us having to track terminal colors.
+ *
+ * Edge cases:
+ *   - Cursor past end-of-line: the line is right-padded with spaces so
+ *     the cursor cell renders as " " inverted (a blank block).
+ *   - cursorX === 0: the "before" span is empty; rendering an empty
+ *     `<text>` in opentui is a no-op, so layout is unchanged.
+ */
+function CursorLine(props: { line: string; cursorX: number }) {
+  const { theme } = useTheme()
+  const padded = createMemo(() => props.line.padEnd(props.cursorX + 1, " "))
+  const before = createMemo(() => padded().slice(0, props.cursorX))
+  const at = createMemo(() => padded().slice(props.cursorX, props.cursorX + 1) || " ")
+  const after = createMemo(() => padded().slice(props.cursorX + 1))
+  return (
+    <box flexDirection="row" flexShrink={0}>
+      <text fg={theme.text} wrapMode="none">
+        {before()}
+      </text>
+      <text fg={theme.text} attributes={TextAttributes.INVERSE} wrapMode="none">
+        {at()}
+      </text>
+      <text fg={theme.text} wrapMode="none">
+        {after()}
+      </text>
     </box>
   )
 }

@@ -91,6 +91,12 @@ export const KobeKeymap: readonly KobeBinding[] = [
     description: "Quit (with confirm)",
   },
   {
+    id: "focus.detach",
+    keys: ["ctrl+q"],
+    category: "Navigation",
+    description: "Back to sidebar (chat keeps streaming)",
+  },
+  {
     id: "dialog.cancel",
     keys: ["esc"],
     category: "Dialog",
