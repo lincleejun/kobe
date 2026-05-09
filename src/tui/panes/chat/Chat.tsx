@@ -1,73 +1,61 @@
 /**
- * Wave 3 Stream G — chat pane.
+ * Chat pane — shell.
  *
- * Replaces the throwaway `panes/chat-placeholder/Chat.tsx`. Owns the
- * entire chat surface for one selected task: header, message list,
- * loading indicator, streaming cursor, tool-call rendering, composer.
+ * After Wave 4's split, this file owns ONLY:
+ *   - State: `state` (ChatState), `draft`, `expandedToolIndex`.
+ *   - Effects: task-switch resubscribe + history reload, pending-prompt
+ *     auto-submit, unmount tidy-up.
+ *   - Submit pipeline: `send()` (used by both onSubmit + auto-prompt).
+ *   - Layout: header, scrollbox container, MessageList, Composer.
  *
- * State model — the {@link ChatState} from `./store.ts`. Two arrays
- * (past, live), one boolean (isStreaming), no separate loading flag,
- * no in-flight buffer. See store.ts top-of-file for the full rationale
- * and the pivot history.
+ * Render details (MessageRow, formatting helpers) live in
+ * `./MessageList.tsx`. Composer details (input box, placeholder) live
+ * in `./Composer.tsx`. Wave-4 streams editing those files do not need
+ * to touch this shell.
  *
- * Lifecycle inside this component:
+ * State model — see `./store.ts` top-of-file. Single chronological
+ * `messages: ChatRow[]`; user submits append; assistant deltas append
+ * or coalesce; tool starts/results pair by name. Pure-data, vitest-
+ * friendly.
+ *
+ * Lifecycle inside this component (still load-bearing):
  *
  *   - On `taskId()` change:
  *       1. Tear down the previous orchestrator subscription.
  *       2. Reset state (`createInitialState`).
  *       3. If the task has a `sessionId`, fire `engine.readHistory(sid)`
- *          and feed it to `setPast`. Brand-new tasks have no sessionId
- *          yet — render an empty list.
+ *          and feed it to `setMessagesFromHistory`. Brand-new tasks have
+ *          no sessionId yet — render an empty list.
  *       4. Subscribe to new task's events; each event flows into
  *          `applyEvent`.
  *
  *   - On user submit:
- *       1. `pushDraftUser(state, prompt)` — sets `isStreaming: true`
- *          immediately so the loading indicator appears that frame.
+ *       1. `pushUser(state, prompt)` — sets `isStreaming: true` so the
+ *          loading indicator appears that frame.
  *       2. `orchestrator.runTask(taskId, prompt)`. On rejection:
  *          `pushSystemError(state, message)`.
  *
  *   - On `pendingPrompt` (from new-task dialog): auto-submit it once,
- *     once the matching task is selected. The accessor is checked once
- *     per task switch; consumed via `onPendingPromptConsumed` so it
- *     doesn't re-fire on resubscribe.
+ *     once the matching task is selected. Consumed via
+ *     `onPendingPromptConsumed` so it doesn't re-fire on resubscribe.
  *
- * What's intentionally minimal (per the brief's "within reason"):
- *
- *   - Tool calls render as a single line `▶ <name>(<one-line-input>)`
- *     followed by a one-line result preview when present. Press
- *     `enter` (when the chat composer is empty) to expand the most
- *     recent tool call. Full details (json input + full output) shown
- *     on expand. Wave 4 owns rich rendering (per-arg syntax, syntax-
- *     highlighted output blobs, etc.).
- *   - Composer is single-line. Multi-line is Wave 4 (`shift-enter` to
- *     split). For now `\n` typed at the prompt is filtered out by the
- *     opentui input renderable anyway.
- *   - History rendering is text-only: `role: "user"|"assistant"` rows
- *     with `string`-coerced content. Tool messages from history are
- *     skipped in v1 (they re-appear during the next live run if the
- *     user resumes; otherwise, Wave 4 polish handles them).
- *
- * What's load-bearing (must NOT regress):
- *
+ * Load-bearing invariants (must NOT regress):
  *   - The "thinking" indicator must appear within one render frame of
  *     submit. The G3 behavior test asserts this.
  *   - Streaming text accumulates by appending each `assistant.delta`
- *     to the rolling render. We do NOT mutate; the renderer reads the
- *     `live` array end-to-end every frame.
+ *     to the rolling render. We do NOT mutate.
  *   - Task switch tears down the prior subscription before subscribing
- *     to the new one (Solid `createEffect` returns the cleanup; we
- *     return the unsubscribe).
+ *     to the new one (Solid `createEffect` returns the cleanup).
  */
 
 import { TextAttributes } from "@opentui/core"
-import { type Accessor, For, Show, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js"
+import { type Accessor, Show, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js"
 import type { Orchestrator } from "../../../orchestrator/core.ts"
 import type { EngineEvent } from "../../../types/engine.ts"
 import { useTheme } from "../../context/theme"
-import { Loading } from "./Loading"
+import { Composer } from "./Composer"
+import { MessageList } from "./MessageList"
 import {
-  type ChatRow,
   type ChatState,
   applyEvent,
   createInitialState,
@@ -102,144 +90,6 @@ export type ChatProps = {
   onPendingPromptConsumed?: () => void
   /** Future: focus management when multiple panes share input. Unused in v1. */
   focused?: Accessor<boolean>
-}
-
-/**
- * Coerce an unknown content blob from `engine.readHistory` into a
- * single string for display. The on-disk JSONL stores `content` as
- * either a plain string or an array of content blocks. We render
- * just the textual blocks; tool blocks are skipped in v1 (they
- * re-render via live events on the next run if the user resumes).
- */
-function coerceHistoryContent(content: unknown): string {
-  if (typeof content === "string") return content
-  if (Array.isArray(content)) {
-    const parts: string[] = []
-    for (const block of content) {
-      if (typeof block === "string") {
-        parts.push(block)
-      } else if (block && typeof block === "object") {
-        const b = block as { type?: unknown; text?: unknown }
-        if (b.type === "text" && typeof b.text === "string") parts.push(b.text)
-      }
-    }
-    return parts.join("")
-  }
-  return ""
-}
-
-/** One-line preview of a tool's input arg blob. */
-function previewToolInput(input: unknown): string {
-  if (input == null) return ""
-  if (typeof input === "string") return collapseToOneLine(input, 60)
-  try {
-    return collapseToOneLine(JSON.stringify(input), 60)
-  } catch {
-    return "<unserializable>"
-  }
-}
-
-function previewToolOutput(output: unknown): string {
-  if (output == null) return ""
-  if (typeof output === "string") return collapseToOneLine(output, 60)
-  try {
-    return collapseToOneLine(JSON.stringify(output), 60)
-  } catch {
-    return "<unserializable>"
-  }
-}
-
-function collapseToOneLine(s: string, max: number): string {
-  const oneLine = s.replace(/\s+/g, " ").trim()
-  if (oneLine.length <= max) return oneLine
-  return `${oneLine.slice(0, max)}…`
-}
-
-/**
- * Render a single chronological row from the unified `messages` array.
- * Tool rows are collapsed by default — `expanded` and `onToggle` thread
- * mouse + keyboard both into the same handler (kobe convention).
- */
-function MessageRow(props: {
-  row: ChatRow
-  isLastAssistant: boolean
-  isStreaming: boolean
-  index: number
-  expanded: boolean
-  onToggle: () => void
-}) {
-  const { theme } = useTheme()
-  if (props.row.kind === "user") {
-    return (
-      <box paddingTop={1}>
-        <text fg={theme.accent} attributes={TextAttributes.BOLD}>
-          you
-        </text>
-        <text fg={theme.text}>{props.row.text}</text>
-      </box>
-    )
-  }
-  if (props.row.kind === "assistant") {
-    return (
-      <box paddingTop={1}>
-        <text fg={theme.success} attributes={TextAttributes.BOLD}>
-          assistant
-        </text>
-        <text fg={theme.text}>
-          {props.row.text}
-          {/* Streaming cursor on the last assistant row mid-turn. */}
-          {props.isLastAssistant && props.isStreaming ? "▏" : ""}
-        </text>
-      </box>
-    )
-  }
-  if (props.row.kind === "system") {
-    return (
-      <box paddingTop={1}>
-        <text fg={theme.error} attributes={TextAttributes.BOLD}>
-          system
-        </text>
-        <text fg={theme.textMuted}>{props.row.text}</text>
-      </box>
-    )
-  }
-  // Tool row.
-  const r = props.row
-  const status = r.done ? "done" : "running"
-  const arrow = props.expanded ? "▼" : "▶"
-  return (
-    <box paddingTop={1}>
-      <text fg={theme.textMuted} onMouseUp={() => props.onToggle()}>
-        {arrow} {r.name}({previewToolInput(r.input)}) — {status}
-      </text>
-      <Show when={props.expanded}>
-        <box paddingLeft={2} paddingTop={0}>
-          <text fg={theme.textMuted}>input:</text>
-          <text fg={theme.text}>{safeStringify(r.input)}</text>
-          <Show when={r.done}>
-            <text fg={theme.textMuted}>output:</text>
-            <text fg={theme.text}>{safeStringify(r.output)}</text>
-          </Show>
-        </box>
-      </Show>
-      <Show when={!props.expanded && r.done}>
-        <text fg={theme.textMuted} onMouseUp={() => props.onToggle()}>
-          {" "}
-          {previewToolOutput(r.output)}
-        </text>
-      </Show>
-    </box>
-  )
-}
-
-function safeStringify(v: unknown): string {
-  if (v == null) return ""
-  if (typeof v === "string") return v
-  try {
-    return JSON.stringify(v, null, 2)
-  } catch {
-    return String(v)
-  }
 }
 
 export function Chat(props: ChatProps) {
@@ -389,6 +239,18 @@ export function Chat(props: ChatProps) {
     setExpandedToolIndex((cur) => (cur === rowIndex ? null : rowIndex))
   }
 
+  // Composer onSubmit: empty-string from the composer means "user hit
+  // enter on an empty draft". We translate that into "expand the most
+  // recent tool row" if there is one; otherwise it's a no-op (the
+  // composer already swallowed the keystroke).
+  function handleComposerSubmit(trimmed: string): void {
+    if (trimmed.length === 0) {
+      if (lastToolIndex() !== null) toggleExpandLastTool()
+      return
+    }
+    void send()
+  }
+
   return (
     <box flexGrow={1} flexDirection="column" paddingLeft={1} paddingRight={1}>
       {/* Header */}
@@ -419,73 +281,26 @@ export function Chat(props: ChatProps) {
             trackOptions: { backgroundColor: theme.background, foregroundColor: theme.borderActive },
           }}
         >
-          <box paddingRight={1} gap={0}>
-            {/* Empty placeholder when we have nothing to show. */}
-            <Show when={state().messages.length === 0}>
-              <box paddingTop={2}>
-                <text fg={theme.textMuted}>Type a prompt below.</text>
-              </box>
-            </Show>
-
-            {/* Single chronological list — user, assistant, tool, system
-                rows in arrival order. */}
-            <For each={state().messages}>
-              {(row, i) => (
-                <MessageRow
-                  row={row}
-                  index={i()}
-                  isLastAssistant={i() === lastAssistantIdx()}
-                  isStreaming={state().isStreaming}
-                  expanded={row.kind === "tool" && expandedToolIndex() === i()}
-                  onToggle={() => toggleExpand(i())}
-                />
-              )}
-            </For>
-
-            {/* Loading spinner while we're waiting for the first token. */}
-            <Show when={showThinking()}>
-              <Loading />
-            </Show>
-
-            {/* Error banner. */}
-            <Show when={state().error}>
-              <box paddingTop={1}>
-                <text fg={theme.error}>error: {state().error}</text>
-              </box>
-            </Show>
-          </box>
+          <MessageList
+            messages={state().messages}
+            isStreaming={state().isStreaming}
+            lastAssistantIdx={lastAssistantIdx()}
+            expandedToolIndex={expandedToolIndex()}
+            onToggleTool={toggleExpand}
+            showThinking={showThinking()}
+            error={state().error}
+          />
         </scrollbox>
       </Show>
 
       {/* Composer. */}
-      <box flexShrink={0} paddingTop={1} flexDirection="row" gap={1}>
-        <text fg={theme.textMuted}>{state().isStreaming ? "…" : ">"}</text>
-        <box flexGrow={1}>
-          <Show
-            when={props.taskId() !== undefined}
-            fallback={<text fg={theme.textMuted}>(no task — press n to create)</text>}
-          >
-            <input
-              value={draft()}
-              placeholder={state().isStreaming ? "(streaming — wait for done)" : "Ask Claude…"}
-              focused={true}
-              onInput={(v: string) => setDraft(v)}
-              onSubmit={() => {
-                // Composer enter behavior:
-                //  - If draft is empty AND there's a tool row, toggle
-                //    its expansion (matches the brief: "press enter to
-                //    expand" without stealing keystrokes mid-typing).
-                //  - Otherwise, send the prompt.
-                if (draft().trim().length === 0 && lastToolIndex() !== null) {
-                  toggleExpandLastTool()
-                  return
-                }
-                void send()
-              }}
-            />
-          </Show>
-        </box>
-      </box>
+      <Composer
+        draft={draft()}
+        onDraftChange={setDraft}
+        isStreaming={state().isStreaming}
+        hasTask={props.taskId() !== undefined}
+        onSubmit={handleComposerSubmit}
+      />
     </box>
   )
 }
