@@ -37,6 +37,8 @@ export interface SpawnClaudeOpts {
   readonly model?: string
   /** Optional `--resume <sessionId>`. Set by `ClaudeCodeLocal.resume()`. */
   readonly resumeSessionId?: string
+  /** Optional `--permission-mode <mode>`. Forwarded verbatim from the orchestrator. */
+  readonly permissionMode?: string
   /** Extra env vars merged on top of the inherited process env. */
   readonly env?: Readonly<Record<string, string>>
   /** Extra CLI args appended after the canonical set. Escape hatch for tests. */
@@ -97,6 +99,9 @@ export function buildArgs(opts: SpawnClaudeOpts): string[] {
   args.push("-p", opts.prompt)
   if (opts.model) {
     args.push("--model", opts.model)
+  }
+  if (opts.permissionMode) {
+    args.push("--permission-mode", opts.permissionMode)
   }
   args.push("--output-format", "stream-json", "--verbose")
   if (opts.extraArgs && opts.extraArgs.length > 0) {

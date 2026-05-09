@@ -52,8 +52,9 @@ import { type ScrollBoxRenderable, TextAttributes } from "@opentui/core"
 import { type Accessor, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount } from "solid-js"
 import type { Orchestrator } from "../../../orchestrator/core.ts"
 import type { OrchestratorEvent } from "../../../types/engine.ts"
-import { useCommandSlashes } from "../../context/command-palette"
+import type { SlashEntry } from "../../context/command-palette"
 import { useTheme } from "../../context/theme"
+import { BUILTIN_CLAUDE_SLASHES } from "./composer/builtin-slashes"
 import { Composer } from "./Composer"
 import { MessageList } from "./MessageList"
 import {
@@ -95,7 +96,35 @@ export type ChatProps = {
 
 export function Chat(props: ChatProps) {
   const { theme } = useTheme()
-  const slashes = useCommandSlashes()
+
+  // Slash-command list — sourced verbatim from claude-code's command
+  // directory (refs/claude-code/src/commands/) via the build-time
+  // extractor at scripts/extract-claude-code-commands.mjs. The static
+  // manifest at ./composer/builtin-slashes.ts is the canonical set
+  // kobe surfaces in the composer dropdown. We don't add kobe-specific
+  // slashes here — keyboard shortcuts (n / d / a) own the orchestrator
+  // verbs (new task / delete / archive) so the slash menu stays the
+  // pure claude-code surface the user already knows.
+  //
+  // Selection runs the entry's onSelect callback, which we wire to
+  // submit `/<name>` (with any aliases preserved as metadata) as the
+  // next prompt for the active task. Whether the claude subprocess
+  // recognizes the slash command in -p mode is its responsibility —
+  // we just forward.
+  const slashes = createMemo<readonly SlashEntry[]>(() =>
+    BUILTIN_CLAUDE_SLASHES.map((entry) => ({
+      display: `/${entry.name}`,
+      description: entry.description || undefined,
+      aliases: entry.aliases?.map((a) => `/${a}`),
+      onSelect: () => {
+        // Route through `send()` (declared below) so the user's slash
+        // command appears in the chat history just like a typed
+        // message — `runTask` directly would send it to the engine
+        // without populating the local message list.
+        void send(`/${entry.name}`)
+      },
+    })),
+  )
 
   // The whole chat state lives in one signal. Solid's structural sharing
   // makes whole-state updates cheap; we don't bother with finer-grained
@@ -119,6 +148,34 @@ export function Chat(props: ChatProps) {
       .find((t) => t.id === id)?.status
   })
   const isCanceled = () => taskStatus() === "canceled"
+
+  // Per-task permission mode read off the orchestrator's tasksSignal so
+  // shift+tab updates land in the indicator the same tick the store
+  // mutates. Undefined when no task is selected; the composer reads
+  // that as "default" for display.
+  const permissionMode = createMemo(() => {
+    const id = props.taskId()
+    if (!id) return undefined
+    return props.orchestrator
+      .tasksSignal()()
+      .find((t) => t.id === id)?.permissionMode
+  })
+
+  // Cycle: default → acceptEdits → plan → default. Mirrors claude-code's
+  // own shift+tab cycle (refs/claude-code/src/utils/permissions/
+  // getNextPermissionMode.ts) minus the bypassPermissions / auto branches
+  // — those need their own UI gating before we expose them via the
+  // composer's mute hotkey.
+  function cyclePermissionMode(): void {
+    const id = props.taskId()
+    if (!id) return
+    const current = permissionMode() ?? "default"
+    const next = current === "default" ? "acceptEdits" : current === "acceptEdits" ? "plan" : "default"
+    void props.orchestrator.setPermissionMode(id, next).catch((err: unknown) => {
+      // eslint-disable-next-line no-console
+      console.error("[kobe] setPermissionMode failed:", err)
+    })
+  }
 
   // (Re)subscribe + reload history on task change. Solid's `on` makes
   // the dep explicit so we don't re-run on every signal access in the
@@ -413,6 +470,8 @@ export function Chat(props: ChatProps) {
         focused={props.focused}
         historyKey={props.taskId()}
         slashes={slashes}
+        permissionMode={permissionMode}
+        onCyclePermissionMode={cyclePermissionMode}
       />
     </box>
   )

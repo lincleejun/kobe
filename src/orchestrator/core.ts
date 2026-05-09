@@ -59,7 +59,7 @@
 
 import { type Accessor, createSignal } from "solid-js"
 import type { AIEngine, EngineEvent, Message, OrchestratorEvent, SessionHandle } from "../types/engine.ts"
-import type { Task, TaskId, TaskStatus } from "../types/task.ts"
+import type { PermissionMode, Task, TaskId, TaskStatus } from "../types/task.ts"
 import type { TaskIndexStore, TaskIndexUnsubscribe } from "./index/store.ts"
 import { gatherPRState, loadPRInstructionsTemplate, renderPRInstructions } from "./pr/index.ts"
 import type { GitWorktreeManager } from "./worktree/manager.ts"
@@ -335,9 +335,12 @@ export class Orchestrator {
     if (task.sessionId) {
       handle = await this.engine.resume(task.sessionId, promptToSend, {
         env: { KOBE_RESUME_CWD: task.worktreePath },
+        permissionMode: task.permissionMode,
       })
     } else {
-      handle = await this.engine.spawn(task.worktreePath, promptToSend)
+      handle = await this.engine.spawn(task.worktreePath, promptToSend, {
+        permissionMode: task.permissionMode,
+      })
       // Persist the freshly-allocated session id so a future kobe
       // restart can resume.
       await this.store.update(task.id, { sessionId: handle.sessionId })
@@ -465,6 +468,24 @@ export class Orchestrator {
     const next = archived ?? !task.archived
     if (task.archived === next) return
     await this.store.update(task.id, { archived: next })
+  }
+
+  /**
+   * Set the tool-permission mode on a task. Persisted to the manifest
+   * so the next spawn/resume passes `--permission-mode <mode>` to the
+   * Claude CLI. The composer's shift+tab cycler calls this; passing
+   * `undefined` clears the field (CLI default).
+   *
+   * Note: this does NOT affect an in-flight session. A `--permission-mode`
+   * flag at spawn time is honored by claude until the next spawn — there's
+   * no live "demote permissions" wire. The mode change takes effect on
+   * the next user submit. Surface this to the UI if it ever becomes
+   * confusing in practice.
+   */
+  async setPermissionMode(id: TaskId | string, mode: PermissionMode | undefined): Promise<void> {
+    const task = this.requireTask(id)
+    if (task.permissionMode === mode) return
+    await this.store.update(task.id, { permissionMode: mode })
   }
 
   /**

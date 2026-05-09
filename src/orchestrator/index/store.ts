@@ -418,9 +418,26 @@ function coerceTask(value: unknown): Task | null {
     // introduction don't have it; default to false (i.e. "active /
     // working session"). The user can archive them with `a`.
     archived: typeof v.archived === "boolean" ? v.archived : false,
+    // Tool-permission mode: optional. Records pre-dating the field
+    // serialize as undefined which the engine layer reads as "no
+    // --permission-mode flag" (CLI default). Unknown string values are
+    // dropped — only the published union is honored, so manual edits to
+    // the JSON can't smuggle invalid flags into the spawn args.
+    permissionMode: isPermissionMode(v.permissionMode) ? v.permissionMode : undefined,
     createdAt: v.createdAt,
     updatedAt: v.updatedAt,
   }
+}
+
+function isPermissionMode(v: unknown): v is import("@/types/task").PermissionMode {
+  return (
+    v === "default" ||
+    v === "acceptEdits" ||
+    v === "plan" ||
+    v === "auto" ||
+    v === "bypassPermissions" ||
+    v === "dontAsk"
+  )
 }
 
 function isTaskStatus(s: string): s is TaskStatus {

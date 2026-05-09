@@ -50,6 +50,7 @@
 
 import { TextAttributes, type KeyEvent, type TextareaRenderable } from "@opentui/core"
 import { type Accessor, For, Show, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js"
+import type { PermissionMode } from "../../../types/engine"
 import { EmptyBorder, SplitBorder } from "../../component/border"
 import type { SlashEntry } from "../../context/command-palette"
 import { useTheme } from "../../context/theme"
@@ -110,6 +111,19 @@ export interface ComposerProps {
    * the highlighted entry, esc dismisses.
    */
   slashes?: Accessor<readonly SlashEntry[]>
+  /**
+   * Reactive accessor for the active task's tool-permission mode.
+   * When undefined, treated as `"default"` for display. The composer
+   * renders an indicator in its inline footer ("⏵ accept edits" /
+   * "📋 plan" / etc.) and shift+tab cycles via {@link onCyclePermissionMode}.
+   */
+  permissionMode?: Accessor<PermissionMode | undefined>
+  /**
+   * Called when the user presses shift+tab in the composer. The parent
+   * computes the next mode and persists it; we just emit the request.
+   * Omit to disable shift+tab cycling.
+   */
+  onCyclePermissionMode?: () => void
 }
 
 /**
@@ -364,6 +378,16 @@ export function Composer(props: ComposerProps) {
    * `handleKeyPress` too).
    */
   function handleKeyDown(key: KeyEvent): void {
+    // shift+tab cycles the per-task permission mode. Highest priority
+    // because we want it consistent regardless of dropdown state.
+    // Falls through silently when the parent doesn't supply a cycler.
+    if (key.name === "tab" && key.shift) {
+      if (props.onCyclePermissionMode) {
+        props.onCyclePermissionMode()
+        key.preventDefault()
+      }
+      return
+    }
     // Slash-dropdown nav has higher priority than history nav. When
     // the dropdown is open, up/down move the highlighted command, esc
     // dismisses (by clearing the buffer), and return runs the selection.
@@ -458,9 +482,43 @@ export function Composer(props: ComposerProps) {
   const actionHint = () => {
     if (!props.hasTask) return ""
     if (props.isStreaming) return "streaming — wait for done"
-    return "enter send · shift+enter newline"
+    return "enter send · shift+enter newline · shift+tab mode"
   }
   const modelLabel = () => props.modelLabel?.() ?? "claude-code"
+
+  // Mode indicator: short label + tone based on the active permission mode.
+  // We treat undefined as "default" for display so the badge always
+  // renders. `default` gets a muted tone; everything more permissive or
+  // restrictive picks up an accent so the change is visible.
+  const modeBadge = createMemo<{ label: string; tone: "muted" | "accent" | "warning" | "primary" }>(() => {
+    const mode = props.permissionMode?.()
+    switch (mode) {
+      case "acceptEdits":
+        return { label: "⏵ accept edits", tone: "accent" }
+      case "plan":
+        return { label: "📋 plan", tone: "primary" }
+      case "auto":
+        return { label: "auto", tone: "primary" }
+      case "bypassPermissions":
+        return { label: "⚠ bypass", tone: "warning" }
+      case "dontAsk":
+        return { label: "don't ask", tone: "warning" }
+      default:
+        return { label: "default", tone: "muted" }
+    }
+  })
+  const modeBadgeColor = () => {
+    switch (modeBadge().tone) {
+      case "accent":
+        return theme.accent
+      case "primary":
+        return theme.primary
+      case "warning":
+        return theme.warning
+      default:
+        return theme.textMuted
+    }
+  }
 
   return (
     <box flexShrink={0} flexDirection="column" paddingTop={1}>
@@ -562,9 +620,14 @@ export function Composer(props: ComposerProps) {
               <text fg={theme.textMuted} wrapMode="none">
                 {actionHint()}
               </text>
-              <text fg={theme.textMuted} wrapMode="none">
-                {modelLabel()}
-              </text>
+              <box flexDirection="row" gap={2} flexShrink={0}>
+                <text fg={modeBadgeColor()} wrapMode="none">
+                  {modeBadge().label}
+                </text>
+                <text fg={theme.textMuted} wrapMode="none">
+                  {modelLabel()}
+                </text>
+              </box>
             </box>
           </Show>
         </box>

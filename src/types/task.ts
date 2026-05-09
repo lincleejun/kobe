@@ -43,6 +43,14 @@ export const toTaskId = (id: string): TaskId => id as TaskId
 export type TaskStatus = "backlog" | "in_progress" | "in_review" | "done" | "canceled" | "error"
 
 /**
+ * Re-export of {@link PermissionMode} so callers that only depend on
+ * `Task` don't have to drag in the engine module just for the type
+ * union. Defined canonically in `types/engine.ts`.
+ */
+export type { PermissionMode } from "./engine.ts"
+import type { PermissionMode } from "./engine.ts"
+
+/**
  * One task. Stored in `~/.kobe/tasks.json` as part of the {@link TaskIndex}.
  *
  * Field invariants:
@@ -72,6 +80,14 @@ export interface Task {
    * normalized to `false` at load time.
    */
   readonly archived: boolean
+  /**
+   * Tool-permission mode passed to `claude --permission-mode <mode>`
+   * on every spawn/resume. Optional: undefined falls through to the
+   * CLI's `default`. Cycled in the composer via shift+tab. Records
+   * written before this field existed normalize to `undefined` at
+   * load time.
+   */
+  readonly permissionMode?: PermissionMode
   readonly createdAt: string
   readonly updatedAt: string
 }

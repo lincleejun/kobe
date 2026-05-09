@@ -28,6 +28,16 @@ export interface SessionHandle {
 }
 
 /**
+ * Tool-permission mode for a session. Mirrors `claude --permission-mode
+ * <mode>` exactly so the value can be forwarded to the CLI without a
+ * mapping table. Cycled by shift+tab in the chat composer (default →
+ * acceptEdits → plan → default). The `auto`, `bypassPermissions`, and
+ * `dontAsk` modes are reserved for future UI surfaces but already
+ * accepted by the engine — they pass through unchanged.
+ */
+export type PermissionMode = "default" | "acceptEdits" | "plan" | "auto" | "bypassPermissions" | "dontAsk"
+
+/**
  * Optional knobs at spawn time. All fields optional — engine impls supply
  * sensible defaults. New options must be added here, not on a subclass.
  */
@@ -40,6 +50,11 @@ export interface SpawnOpts {
   readonly timeoutMs?: number
   /** Optional system prompt prepended to the user prompt. */
   readonly systemPrompt?: string
+  /**
+   * Tool-permission mode. When omitted the engine omits the flag and the
+   * CLI defaults to `default`. See {@link PermissionMode} for the cycle.
+   */
+  readonly permissionMode?: PermissionMode
 }
 
 /**
