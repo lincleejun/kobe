@@ -53,7 +53,7 @@ import { Terminal } from "./panes/terminal"
 import { type DialogContext, DialogProvider, useDialog } from "./ui/dialog"
 import { DialogConfirm } from "./ui/dialog-confirm"
 
-const DEFAULT_THEME = "tokyonight"
+const DEFAULT_THEME = "conductor"
 
 /* --------------------------------------------------------------------- */
 /*  Engine selection + fake-engine side-channel                           */
