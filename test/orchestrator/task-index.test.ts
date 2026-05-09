@@ -51,7 +51,7 @@ describe("TaskIndexStore — CRUD", () => {
       title: "first",
       repo: "/repo",
       branch: "kobe/first",
-      worktreePath: "/repo/.kobe/worktrees/first",
+      worktreePath: "/repo/.claude/worktrees/first",
       sessionId: null,
       status: "backlog",
     })
@@ -320,7 +320,7 @@ describe("TaskIndexStore — atomic write & corruption recovery", () => {
       title: "post-crash",
       repo: "/r",
       branch: "kobe/post-crash",
-      worktreePath: "/r/.kobe/worktrees/post-crash",
+      worktreePath: "/r/.claude/worktrees/post-crash",
       sessionId: null,
       status: "backlog",
     })

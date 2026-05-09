@@ -3,9 +3,12 @@
  *
  * Per DESIGN.md §11.3 (resolved) the worktree root is per-repo and lives
  * adjacent to the source tree at `<repo>/.claude/worktrees/<task-id>/`.
- * (Wave 4: moved from `.kobe/worktrees/` to share namespace with Claude
- * Code's own agent-spawn worktrees, per Jackson's request — same
- * convention, one less hidden directory to gitignore.)
+ * Shared namespace with Claude Code's own agent-spawn worktrees — one
+ * hidden dir, both tools' worktrees inside. Do NOT move this back to
+ * `.kobe/worktrees/`; that proposal pre-dates Jackson's resolution and
+ * keeps cropping up in stale comments / test fixtures. Search-and-replace
+ * any survivors when you find them.
+ *
  * Keeping this in one place means the orchestrator, the worktree
  * manager, the task index, and any future "list all kobe worktrees"
  * tool agree on where to look — no string concatenation scattered

@@ -10,7 +10,7 @@
  *
  * Each test gets a fresh tmp repo built by
  * `test/behavior/fixtures/repo-init.sh`. We tear it down explicitly so
- * macOS's `/var/folders` doesn't fill up with stale `.kobe/worktrees`
+ * macOS's `/var/folders` doesn't fill up with stale `.claude/worktrees`
  * trees if a run is interrupted.
  */
 

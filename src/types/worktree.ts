@@ -2,8 +2,8 @@
  * Worktree manager — kobe's wrapper around `git worktree`.
  *
  * See DESIGN.md §5.3 (orchestrator owns worktree manager) and §11.3
- * (open question: worktree root location, proposed
- * `<repo>/.kobe/worktrees/<task-id>/`).
+ * (resolved: worktree root is `<repo>/.claude/worktrees/<task-id>/`,
+ * shared namespace with Claude Code's own agent-spawn worktrees).
  *
  * The orchestrator depends on this interface; Stream B (Wave 1) will
  * ship `GitWorktreeManager` against it. The orchestrator must never

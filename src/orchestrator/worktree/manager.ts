@@ -17,7 +17,7 @@
  *     true. The single most important safety property of this module:
  *     "I lost my changes because kobe deleted the worktree" must be
  *     impossible without explicit consent.
- *   - `list()` only returns worktrees inside `<repo>/.kobe/worktrees/`
+ *   - `list()` only returns worktrees inside `<repo>/.claude/worktrees/`
  *     (the convention from DESIGN.md §11 / PLAN.md §B). Worktrees the
  *     user created outside this root are invisible to kobe.
  *
@@ -75,7 +75,7 @@ export class GitWorktreeManager implements WorktreeManager {
       throw new Error(`create(): ${worktreePath} exists but is not a registered git worktree`)
     }
 
-    // Make sure the parent dir exists (`.kobe/worktrees/` may be the
+    // Make sure the parent dir exists (`.claude/worktrees/` may be the
     // first time we write into the repo).
     fs.mkdirSync(path.dirname(worktreePath), { recursive: true })
 
@@ -188,7 +188,7 @@ export class GitWorktreeManager implements WorktreeManager {
    * List kobe-managed worktrees under `repo`.
    *
    * Parses `git worktree list --porcelain` and filters to entries
-   * whose path lives inside `<repo>/.kobe/worktrees/`. Worktrees the
+   * whose path lives inside `<repo>/.claude/worktrees/`. Worktrees the
    * user created elsewhere are invisible to kobe — we don't enumerate
    * the whole world.
    */
@@ -271,7 +271,7 @@ export class GitWorktreeManager implements WorktreeManager {
     if (!match || !match.path || !match.branch || match.detached) return null
     return {
       // Return the caller's requested path verbatim — they passed in
-      // `<repo>/.kobe/worktrees/<id>` and may compare against that
+      // `<repo>/.claude/worktrees/<id>` and may compare against that
       // exact string later. Returning git's macOS-resolved
       // `/private/...` form would surprise them.
       path: worktreePath,
