@@ -73,11 +73,13 @@ export type PreviewApi = {
 }
 
 /**
- * Visible body height for scrollbox + page-key fallback. opentui's
- * scrollbox accepts `height` as cells; pgup/pgdn use this as the unit.
- * Matches dialog-diff's choice.
+ * Page-key unit for pgup/pgdn. The scrollbox itself flex-grows to fill
+ * the parent (so a single file expands top-to-bottom), but pgup/pgdn
+ * needs a constant cell count that doesn't depend on a measurable
+ * viewport. 20 lines matches dialog-diff's choice and is roughly a
+ * reasonable terminal half-screen.
  */
-const BODY_HEIGHT = 20
+const PAGE_LINES = 20
 
 type ContentState =
   | { kind: "loading" }
@@ -234,7 +236,7 @@ export function Preview(props: PreviewProps) {
       // 1e9 is well above any realistic file's line count.
       scroll?.scrollTo(1e9)
     },
-    pageSize: () => BODY_HEIGHT,
+    pageSize: () => PAGE_LINES,
   })
 
   return (
@@ -416,7 +418,7 @@ function LinesBody(props: { content: Accessor<ContentState>; refSet: (r: ScrollB
     >
       <scrollbox
         ref={props.refSet}
-        height={BODY_HEIGHT}
+        flexGrow={1}
         backgroundColor={theme.backgroundPanel}
         scrollbarOptions={{ visible: true }}
       >
