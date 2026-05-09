@@ -65,6 +65,20 @@ We *do* keep a small **task index** — title, repo, branch, worktree path, mapp
 
 When in doubt, the source of truth is on disk in a place that already exists.
 
+#### 2.5.1 Concretely, for the chat pane
+
+This is the one place where "delegate to Claude Code" is most tempting to ignore — the chat is interactive and live. Resist. The minimal-state pattern (cribbed from opcode's `claude-code-session`):
+
+- **One source-of-truth array** for chat messages, hydrated from `engine.readHistory(sessionId)` on session mount, then **appended-to** as live `EngineEvent`s arrive. No separate "inflight" buffer. No re-read on `done` — the stream events ARE what just got written to JSONL.
+- **No per-session message cache.** On session switch, clear the array, re-read from disk for the new session. Reload is cheap (JSONL is local), bookkeeping a per-session cache is not.
+- **`isStreaming` is derived from events**, never manually toggled. `true` between user submit and `done`/`error`. The loading indicator and the streaming cursor both key off this single flag.
+- **Tool call correlation happens at render time**, by searching the messages array backward for a matching `tool_use_id`. Do NOT maintain a `Map<id, ToolStart>` alongside the message list — that's the kind of duplicated state that drifts.
+- **Title generation**: opcode uses `Session ${id.slice(0,8)}` (no derived title). kobe goes lighter on UX — `title = first 40 chars of first user prompt, "…"-truncated` — derived in `Orchestrator.createTask`. Phase 2 polish may add an LLM-summary side-call.
+
+The shape impedance — `engine.readHistory()` returns `Message` (per-message disk shape), `engine.stream()` yields `EngineEvent` (normalized live deltas) — is real and not papered over. The chat keeps both as backing data and renders them with a single row mapper. Don't synthesize fake `Message` entries from events; honest type separation beats brittle round-tripping.
+
+The principle, in one line: **anything that can be re-derived from Claude Code's JSONL is not state we own.**
+
 ---
 
 ## 3. What kobe is / is not
