@@ -148,9 +148,29 @@ In priority order:
 
 4. **Auto-update** (#4): defer until 2 + 3 are stable. Simplest approach: ship `kobe --check-updates` that compares `package.json` version against a release manifest URL, prints a one-line banner if newer.
 
-5. **Document the chat refactor** in `docs/DESIGN.md` §2.5.1 — the previous note saying "no re-read on done" is now correct again (single messages array doesn't need it), but it should also say "do not split state into past/live/draftUser; opcode keeps one array, we follow." Update the §2.5.1 to reflect the rewrite.
+5. **Match Claude Code's chat render exactly** — the message refactor fixed the *shape* (single chronological array) but the *visual rendering* of each row is still kobe's homegrown styling. Mirror Claude Code's own conventions:
+   - Open `refs/claude-code/src/ink/components/` (the leaked Anthropic source has the canonical Ink-based renderers).
+   - Match their assistant text formatting (markdown? code blocks? citations?), tool call display (collapsed banner shape, the indent + line widths, the result preview format), thinking-dots animation, error formatting.
+   - kobe should feel like Claude Code, not "a third-party shell wrapping Claude Code." When Jackson types in kobe and gets a reply, it should be visually indistinguishable (modulo the fact that we're embedded in a 5-pane layout, not full-screen).
+   - Files to update: `src/tui/panes/chat/Chat.tsx` (`MessageRow`, `Loading`), `src/tui/panes/chat/store.ts` (might need to add fields like `isThinking`, `usage` row, `code-block` detection).
 
-6. **Long-term: rename `kobe`** — still a city codename. When the product gets a real name, rename the repo + binary + docs.
+6. **Optimize the chat composer (input field)** — current implementation is opentui's bare `<input>` with single-line text + enter-to-submit. Limitations:
+   - Single line only — no multi-line composition (newlines via shift+enter, paste with newlines, etc.).
+   - No history navigation (up/down to recall prior prompts in the session).
+   - No partial submit / draft persistence across task switches.
+   - No paste handling (large pastes flicker; binary/image paste is undefined).
+   - No syntax-aware features (mention completion, command palette inside input).
+
+   First check if a ref has prior art:
+   - `refs/claude-code/src/ink/components/` — Claude Code's own input. Highly likely has multi-line, history, paste handling. Port the patterns.
+   - `refs/agent-deck` — different domain (it's a session manager, not an editor) but might have a polished input.
+   - `refs/opcode` — desktop app, less applicable.
+
+   If no ref fits, build incrementally: multi-line first, then history, then paste, then mention completion. Keep the composer in `src/tui/panes/chat/Chat.tsx` until it gets large enough to warrant its own file.
+
+7. **Document the chat refactor** in `docs/DESIGN.md` §2.5.1 — the previous note saying "no re-read on done" is now correct again (single messages array doesn't need it), but it should also say "do not split state into past/live/draftUser; opcode keeps one array, we follow." Update the §2.5.1 to reflect the rewrite.
+
+8. **Long-term: rename `kobe`** — still a city codename. When the product gets a real name, rename the repo + binary + docs.
 
 ---
 
