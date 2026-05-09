@@ -1,0 +1,108 @@
+/**
+ * Sidebar key bindings — Solid hook layer.
+ *
+ * j/k (and down/up) navigate between *navigable* tasks. Group headers and
+ * empty groups are skipped — the cursor moves over a `flatTaskIds` array
+ * the parent computes from {@link groupByStatus}. `enter` selects the
+ * task at the current cursor index. `g g` (chord) jumps to the top, `G`
+ * jumps to the bottom — vim conventions, matching opencode's lifted shell.
+ *
+ * The bindings are gated on a `focused` accessor: kobe's focus model is
+ * still owned by the parent (Stream E will manage focus globally in Wave
+ * 3+), so the sidebar publishes `enabled = focused()` and trusts the
+ * parent. Default `focused = () => true` is provided by the consumer
+ * component (`Sidebar.tsx`); the hook itself takes whatever it's given.
+ *
+ * Architecture: the navigation/chord state machine lives in
+ * `controller.ts` (no Solid, no opentui) so unit tests can run under
+ * Node. This file only owns the Solid hook + key→method wiring; the
+ * `useBindings` import here is the only thing that drags @opentui/solid
+ * into this module's import graph.
+ *
+ * `g g` chord rationale: opentui's keymap layer
+ * (`src/tui/lib/keymap.tsx`) has no multi-key chord support. Adding it
+ * was out of scope for Stream F (would touch shared infra). When the
+ * project grows more chords (`d d`, `c c`, etc.), promote the
+ * controller's chord machinery into the keymap layer.
+ *
+ * No `Esc` binding here: the parent / dialog stack owns escape (the
+ * `useBindings` precedence model means a dialog's escape always fires
+ * before ours, so we never accidentally swallow it). When the sidebar is
+ * the only focusable pane and no dialog is open, escape is a no-op.
+ */
+
+import type { Accessor } from "solid-js"
+import { useBindings } from "../../lib/keymap"
+import { createSidebarController } from "./controller"
+
+/**
+ * Arguments for {@link useSidebarBindings}. `cursorIndex`,
+ * `setCursorIndex`, and `flatTaskIds` come from the Sidebar's local Solid
+ * signals; the component owns the cursor state and we just push it.
+ */
+export type SidebarBindingsOpts = {
+  /** Whether the sidebar should respond to keys at all. */
+  focused: Accessor<boolean>
+  /** Current cursor index into the flat task id list. -1 if no tasks. */
+  cursorIndex: Accessor<number>
+  /** Setter for the cursor index. The hook clamps to valid range. */
+  setCursorIndex: (next: number) => void
+  /** Live flat list of navigable task ids, in display order. */
+  flatTaskIds: Accessor<readonly string[]>
+  /** Selection callback. Fires on `enter` with the task id under the cursor. */
+  onSelect: (id: string) => void
+}
+
+/**
+ * Register the sidebar's pane-local key bindings. Call inside the Solid
+ * component that hosts the sidebar — bindings are torn down on unmount
+ * via `useBindings`'s onCleanup hook.
+ *
+ * Internally builds a {@link SidebarController} and wires its methods to
+ * the keymap layer.
+ */
+export function useSidebarBindings(opts: SidebarBindingsOpts): void {
+  const ctrl = createSidebarController({
+    getCursor: () => opts.cursorIndex(),
+    setCursor: (n) => opts.setCursorIndex(n),
+    getFlatIds: () => opts.flatTaskIds(),
+    onSelect: (id) => opts.onSelect(id),
+  })
+
+  useBindings(() => ({
+    enabled: opts.focused(),
+    bindings: [
+      { key: "j", cmd: () => ctrl.moveDown() },
+      { key: "down", cmd: () => ctrl.moveDown() },
+      { key: "k", cmd: () => ctrl.moveUp() },
+      { key: "up", cmd: () => ctrl.moveUp() },
+      { key: "return", cmd: () => ctrl.selectCurrent() },
+      {
+        // Both `g` (arm `g g` chord, complete on second press) and `G`
+        // (jump to bottom) come through this binding because the local
+        // keymap layer (`src/tui/lib/keymap.tsx`) does not prefix
+        // `shift+` for single-letter names — `Shift+G` arrives as
+        // `name = "g", shift = true`. We discriminate via `event.shift`
+        // inside the handler, which keeps the binding table flat and
+        // avoids registering a no-op `shift+g` chord that the matcher
+        // would never produce.
+        key: "g",
+        cmd: (event) => {
+          if (event.shift) ctrl.pressShiftG()
+          else ctrl.pressG()
+        },
+      },
+    ],
+  }))
+}
+
+// Re-export the controller surface so callers that don't need the Solid
+// hook can pull both from this module if convenient. Tests should
+// import from `./controller` directly to avoid the @opentui/solid
+// import that lands transitively through `../../lib/keymap`.
+export {
+  GG_CHORD_TIMEOUT_MS,
+  createSidebarController,
+  type SidebarController,
+  type SidebarControllerOpts,
+} from "./controller"
