@@ -29,6 +29,14 @@ import { useTheme } from "../../context/theme"
 import { Loading } from "./Loading"
 import type { ChatRow } from "./store"
 
+/**
+ * Anthropic's Claude brand orange. Hardcoded (not pulled from the
+ * theme) because the assistant label IS the brand — it should stay
+ * orange regardless of the user's theme choice. Matches the orange in
+ * Claude's logo / docs / favicon.
+ */
+const CLAUDE_ORANGE = "#d97757"
+
 export interface MessageListProps {
   messages: readonly ChatRow[]
   isStreaming: boolean
@@ -111,8 +119,8 @@ export function MessageRow(props: {
   if (props.row.kind === "assistant") {
     return (
       <box paddingTop={1}>
-        <text fg={theme.success} attributes={TextAttributes.BOLD}>
-          assistant
+        <text fg={CLAUDE_ORANGE} attributes={TextAttributes.BOLD}>
+          Claude
         </text>
         <text fg={theme.text}>
           {props.row.text}

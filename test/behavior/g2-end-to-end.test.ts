@@ -222,7 +222,7 @@ test("G2 — create task, send prompt, see assistant delta in chat", async () =>
 
   // Also: the user's own prompt and the assistant header are visible.
   expect(finalScreen).toContain("demo task ping")
-  expect(finalScreen).toContain("assistant")
+  expect(finalScreen).toContain("Claude")
 
   // ---- clean exit ------------------------------------------------
   await kobe.exit()
