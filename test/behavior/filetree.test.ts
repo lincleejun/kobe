@@ -150,10 +150,7 @@ test("filetree H — pressing 2 shows Changes tab with only modified files", asy
   // bare paths with no prefix glyph, so a positive match on these
   // patterns proves the tab swap landed AND the parser fed the right
   // status codes through.
-  const changesScreen = await kobe.waitFor(
-    (s) => /M\s+src\/index\.ts/.test(s) && /\?\s+new-file\.txt/.test(s),
-    10_000,
-  )
+  const changesScreen = await kobe.waitFor((s) => /M\s+src\/index\.ts/.test(s) && /\?\s+new-file\.txt/.test(s), 10_000)
 
   expect(changesScreen).toMatch(/M\s+src\/index\.ts/)
   expect(changesScreen).toMatch(/\?\s+new-file\.txt/)
