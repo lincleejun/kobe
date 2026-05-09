@@ -20,6 +20,7 @@
  *     `/script` and `/finish`. Production never sets the env vars.
  */
 
+import * as fs from "node:fs"
 import { homedir } from "node:os"
 import { basename, join } from "node:path"
 import { TextAttributes } from "@opentui/core"
@@ -156,6 +157,48 @@ type NewTaskInput = { repo: string; baseRef: string }
 
 /** Default base ref when the user leaves the field blank. */
 const DEFAULT_BASE_REF = "main"
+
+/**
+ * Validate a repo path entered in the new-task dialog. Returns null
+ * when the path looks like a usable git repo, or a human-readable
+ * reason string otherwise. The dialog renders the reason inline and
+ * blocks submission so a typo'd path doesn't get persisted as
+ * `lastNewTaskRepo` and can't drag every subsequent `runTask` into
+ * `git worktree add` failures.
+ *
+ * Two checks (in order):
+ *   1. The path exists and is a directory. We do NOT recursively
+ *      create — a non-existent path is almost always a typo, not a
+ *      "please mkdir for me" request.
+ *   2. `git -C <path> rev-parse --git-dir` succeeds. This catches
+ *      both "exists but not a repo" and "exists but git is unhappy"
+ *      with a single check.
+ */
+function validateRepoPath(repo: string): string | null {
+  const trimmed = repo.trim()
+  if (!trimmed) return "repo path is required"
+  // existsSync + statSync.isDirectory in one shot.
+  let stat: import("node:fs").Stats
+  try {
+    stat = fs.statSync(trimmed)
+  } catch {
+    return `path does not exist: ${trimmed}`
+  }
+  if (!stat.isDirectory()) return `not a directory: ${trimmed}`
+  try {
+    const { spawnSync } = require("node:child_process") as typeof import("node:child_process")
+    const out = spawnSync("git", ["rev-parse", "--git-dir"], {
+      cwd: trimmed,
+      encoding: "utf-8",
+      timeout: 2000,
+      stdio: ["ignore", "pipe", "ignore"],
+    })
+    if (out.status !== 0) return `not a git repository: ${trimmed}`
+  } catch {
+    return `not a git repository: ${trimmed}`
+  }
+  return null
+}
 
 /**
  * List local branches in the given repo, sorted with the default branch
@@ -299,9 +342,27 @@ function NewTaskDialog(props: {
   const repoWindow = createMemo<PickerWindow>(() => windowAround(repoFiltered(), repoCursor()))
   const branchWindow = createMemo<PickerWindow>(() => windowAround(branchFiltered(), branchCursor()))
 
+  // Validation error shown inline when the user tries to submit a bad
+  // repo path. Null while the user is still typing — we don't shout
+  // before they're done. Cleared on every keystroke that changes the
+  // repo field so the message doesn't linger after they fix the typo.
+  const [submitError, setSubmitError] = createSignal<string | null>(null)
+  createEffect(() => {
+    void repo()
+    setSubmitError(null)
+  })
+
   function commit() {
     const r = repo().trim()
     if (!r) return
+    const reason = validateRepoPath(r)
+    if (reason) {
+      setSubmitError(reason)
+      // Snap focus back to the repo field — the user has to fix it
+      // before anything else matters.
+      setField("repo")
+      return
+    }
     const b = baseRef().trim() || DEFAULT_BASE_REF
     props.onSubmit({ repo: r, baseRef: b })
     dialog.clear()
@@ -425,6 +486,9 @@ function NewTaskDialog(props: {
             </text>
           </Show>
         </box>
+      </Show>
+      <Show when={submitError()}>
+        <text fg={theme.error}>※ {submitError()}</text>
       </Show>
       <box gap={0}>
         <text fg={field() === "baseRef" ? theme.accent : theme.textMuted}>from branch</text>
