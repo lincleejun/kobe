@@ -1,243 +1,239 @@
 /**
- * Wave 3 Stream G — chat state.
+ * kobe chat state — single chronological `messages` array.
  *
- * **Architectural pivot from the original brief (recorded for future
- * sessions).** The first cut planned to maintain a complex `ChatMessage[]`
- * shadow store with `inFlight` accumulator + tool-call correlation map +
- * `pending` flag separate from `isStreaming`. The coordinator pushed back
- * twice with progressively simpler designs. The final shape — what this
- * file implements — is the simplest one that works:
+ * **Why one array, not three.** The earlier design split state into
+ * `past + live + draftUser` (mirroring the engine's "history vs. live
+ * events" split). The split couldn't preserve multi-turn user history:
+ * `draftUser` was a single slot, so each new user submit overwrote the
+ * previous prompt and the user's earlier turns vanished from the chat
+ * unless we forced a JSONL re-read on every `done`. opcode's
+ * `claude-code-session` does the right thing — one `messages[]` that
+ * grows, user submits append to it, assistant deltas append (or
+ * coalesce into the in-flight assistant row), tool events append in
+ * arrival order. We follow that.
  *
- *   - **Two arrays** (`past`, `live`), one render path.
- *   - **One boolean** (`isStreaming`) that doubles as the loading flag.
- *   - **No re-read after `done`** — opcode doesn't, and the stream
- *     events ARE what Claude Code is writing to JSONL in parallel.
- *     They're two views of the same write stream, not separate sources.
- *   - **Tool-call correlation at render time**, not in this module.
- *     The renderer scans `live` backward for matching `tool.start`.
- *
- * Why two arrays instead of one (the "Option A" of the coordinator's
- * second message): keeping `past: Message[]` (engine-shaped) separate
- * from `live: EngineEvent[]` (event-shaped) is honest about the type
- * drift. The alternative — synthesizing `Message` entries from each
- * `EngineEvent` — requires the synthesizer to stay byte-compatible
- * with whatever JSONL shape Claude Code happens to write. We don't.
- *
- * Lifecycle (the renderer drives this):
+ * Lifecycle:
  *
  *   1. Task mount / sessionId change:
  *        state = createInitialState()
  *        const past = await engine.readHistory(sessionId)
- *        state = setPast(state, past)
+ *        state = setMessagesFromHistory(state, past)
  *   2. Subscribe to orchestrator events.
  *   3. On user submit:
- *        state = pushDraftUser(state, prompt)
+ *        state = pushUser(state, prompt)
  *        await orchestrator.runTask(taskId, prompt)
  *   4. On each EngineEvent:
  *        state = applyEvent(state, ev)
- *        // - assistant.delta / tool.start / tool.result → append to live
- *        // - assistant.delta → isStreaming = true
- *        // - done / error → isStreaming = false (and error sets banner)
- *   5. On task switch: state = createInitialState() (no flush, no merge)
+ *   5. On task switch: state = createInitialState() (no flush, no merge).
  *
- * Why no re-read on `done`:
- *   - Claude Code writes to JSONL on the same line it emits stream-json.
- *     The events we already appended to `live` are the same content.
- *   - Re-reading would cause a flicker (or a duplicate dance) with no
- *     correctness gain.
- *   - On the NEXT task switch / mount, `readHistory` picks up everything
- *     including the most recent run. So the durability story is intact;
- *     we just don't proactively reconcile mid-session.
- *
- * What's deliberately out of scope:
- *
- *   - Tool-call correlation by id/name. Live events arrive in order;
- *     the renderer pairs them by walking the array. No map.
- *   - `usage` event → token bookkeeping. Future status bar.
- *   - History de-dup against live events on a forced reload. We don't
- *     reload mid-session, so no merge logic exists.
+ * No re-read on `done`. Live events ARE the canonical record while the
+ * session is open; the next mount picks up everything from JSONL.
  *
  * No Solid / opentui imports — pure data, vitest-friendly under Node.
  */
 
 import type { EngineEvent, Message } from "../../../types/engine.ts"
 
-/**
- * One ephemeral "user prompt that hasn't been written to JSONL yet"
- * row. Rendered between `past` and `live` so the user sees their own
- * input the moment they hit enter, instead of waiting for Claude Code
- * to flush the user turn to disk. Cleared on the next task switch
- * (which re-reads `past` and the prompt is now part of it).
- *
- * Optional. Some flows (e.g. resume from sidebar with no new prompt)
- * never set it.
- */
-export interface DraftUserMessage {
-  readonly text: string
-  /** Wall-clock submit time, ISO-8601. */
-  readonly ts: string
-}
+/** One chronological row in the chat. The renderer maps these to JSX. */
+export type ChatRow =
+  | { readonly kind: "user"; readonly text: string; readonly ts: string }
+  | { readonly kind: "assistant"; readonly text: string; readonly ts: string }
+  | {
+      readonly kind: "tool"
+      readonly name: string
+      readonly input: unknown
+      readonly output?: unknown
+      readonly done: boolean
+      readonly ts: string
+    }
+  | { readonly kind: "system"; readonly text: string; readonly ts: string }
 
-/**
- * The chat-pane state. Pure — no Solid signals, no opentui refs.
- */
 export interface ChatState {
-  /**
-   * Persisted history from `engine.readHistory(sessionId)`. Replaced
-   * wholesale on task switch. Treated as immutable between
-   * {@link setPast} calls — we don't apply live events to it.
-   */
-  readonly past: readonly Message[]
-
-  /**
-   * Events seen since the last task switch / mount. Append-only during
-   * a session; cleared on task switch. The renderer maps these to
-   * display rows.
-   */
-  readonly live: readonly EngineEvent[]
-
-  /**
-   * The user's just-submitted prompt, rendered eagerly so the user
-   * sees their input before the engine flushes it to JSONL. Cleared
-   * on task switch (next `past` will include it).
-   */
-  readonly draftUser: DraftUserMessage | null
-
-  /**
-   * True while an assistant turn is in flight. Set on submit (or on
-   * the first `assistant.delta` after a session-internal trigger);
-   * cleared on `done`/`error`. The {@link Loading} indicator and the
-   * trailing streaming-cursor both read this.
-   *
-   * "Loading" and "streaming" are the same boolean. The visual
-   * distinction (spinner vs. cursor) is "is there in-flight assistant
-   * text yet?" — derived at render time, not stored here.
-   */
+  /** All messages in chronological order. Render in array order. */
+  readonly messages: readonly ChatRow[]
+  /** True between user submit and `done`/`error`. Drives the spinner + cursor. */
   readonly isStreaming: boolean
-
-  /**
-   * Transient error banner. Set on engine `error` events or
-   * orchestrator `runTask` rejections. Cleared on the next submit.
-   */
+  /** Transient error banner. Cleared on next submit. */
   readonly error: string | null
 }
 
 /** Build the initial state. Used at mount and on task switch. */
 export function createInitialState(): ChatState {
   return {
-    past: [],
-    live: [],
-    draftUser: null,
+    messages: [],
     isStreaming: false,
     error: null,
   }
 }
 
 /**
- * Replace persisted history. Called after `engine.readHistory` resolves
- * on task switch / first mount. Clears `live` and `draftUser` because
- * the new `past` is now the full record — anything we'd accumulated in
- * the live buffer is either already in `past` or about to be (if a new
- * stream is starting).
- *
- * Does NOT touch `isStreaming` or `error` — those are independent
- * surfaces.
+ * Replace messages from `engine.readHistory(sessionId)`. Called once
+ * per task mount. Clears nothing else (history load is independent of
+ * streaming state — typically nothing's streaming at mount anyway).
  */
-export function setPast(state: ChatState, past: readonly Message[]): ChatState {
+export function setMessagesFromHistory(state: ChatState, past: readonly Message[]): ChatState {
   return {
     ...state,
-    past,
-    live: [],
-    draftUser: null,
+    messages: past.map(messageToRow),
   }
 }
 
-/**
- * Record a freshly-submitted user prompt. Sets `isStreaming: true`,
- * stamps the draft, clears any prior error. The `runTask` call that
- * the renderer fires next will start producing events that flow
- * through {@link applyEvent}.
- *
- * We set `isStreaming: true` here (not waiting for the first
- * `assistant.delta`) so the loading indicator appears immediately —
- * the user sees feedback the moment they press enter, not 500ms later
- * when the first delta arrives.
- */
-export function pushDraftUser(state: ChatState, prompt: string, nowIso: string = new Date().toISOString()): ChatState {
+/** Append a freshly-submitted user prompt. Sets `isStreaming: true`. */
+export function pushUser(state: ChatState, prompt: string, nowIso: string = new Date().toISOString()): ChatState {
   return {
     ...state,
     isStreaming: true,
     error: null,
-    draftUser: { text: prompt, ts: nowIso },
+    messages: [...state.messages, { kind: "user", text: prompt, ts: nowIso }],
   }
 }
 
 /**
- * Apply a single {@link EngineEvent} to the state. Pure — returns a new
- * state, never mutates.
+ * Apply a single {@link EngineEvent} to the state. Pure.
  *
- * Invariants exercised by `test/tui/chat.test.tsx`:
- *
- *   - `assistant.delta`: append to `live`, ensure `isStreaming: true`
- *     (defensive — covers stream-initiated turns where we missed the
- *     `pushDraftUser` call).
- *   - `tool.start` / `tool.result`: append to `live` in arrival order.
- *     The renderer correlates them at draw time.
- *   - `usage`: ignored (status bar's job).
- *   - `done`: set `isStreaming: false`. We do NOT clear `live` —
- *     subsequent mounts/switches re-read from disk and reset; mid-
- *     session, the live record IS the correct trailing render content.
- *   - `error`: set `isStreaming: false`, write the message to `error`.
- *     Like `done`, we keep `live` intact — the user sees the prefix
- *     of the failed turn AND the error banner.
+ *   - `assistant.delta`: append a new assistant row, OR concat into the
+ *     last assistant row if it's the most recent message (token-level
+ *     streaming would benefit from that; Claude Code emits one delta
+ *     per turn so this is mostly the "append" case in practice).
+ *   - `tool.start`: push a `tool` row with `done: false`.
+ *   - `tool.result`: walk back to the most recent unfinished tool row
+ *     with the same `name`, set its `output` and `done`. If no match,
+ *     push a standalone tool row.
+ *   - `usage`: ignored.
+ *   - `done`: `isStreaming: false`.
+ *   - `error`: append a `system` row + `isStreaming: false` + banner.
  */
-export function applyEvent(state: ChatState, ev: EngineEvent): ChatState {
+export function applyEvent(state: ChatState, ev: EngineEvent, nowIso: string = new Date().toISOString()): ChatState {
   switch (ev.type) {
-    case "assistant.delta":
+    case "assistant.delta": {
+      const last = state.messages[state.messages.length - 1]
+      if (last && last.kind === "assistant") {
+        // Concat into the last assistant row (handles token-by-token
+        // streaming gracefully if the engine ever switches to that).
+        const merged: ChatRow = { kind: "assistant", text: last.text + ev.text, ts: last.ts }
+        return {
+          ...state,
+          isStreaming: true,
+          messages: [...state.messages.slice(0, -1), merged],
+        }
+      }
       return {
         ...state,
-        live: [...state.live, ev],
         isStreaming: true,
+        messages: [...state.messages, { kind: "assistant", text: ev.text, ts: nowIso }],
       }
+    }
     case "tool.start":
-    case "tool.result":
-      // Tool events stay live for rendering; pairing happens at render
-      // time by walking the array. No correlation map here.
       return {
         ...state,
-        live: [...state.live, ev],
+        messages: [...state.messages, { kind: "tool", name: ev.name, input: ev.input, done: false, ts: nowIso }],
       }
+    case "tool.result": {
+      // Find the most recent unfinished tool row with this name and
+      // patch it. If none, append a standalone result row.
+      const idx = findLastIndex(state.messages, (m) => m.kind === "tool" && !m.done && m.name === ev.name)
+      if (idx >= 0) {
+        const target = state.messages[idx] as Extract<ChatRow, { kind: "tool" }>
+        const patched: ChatRow = { ...target, output: ev.output, done: true }
+        const next = state.messages.slice()
+        next[idx] = patched
+        return { ...state, messages: next }
+      }
+      return {
+        ...state,
+        messages: [
+          ...state.messages,
+          { kind: "tool", name: ev.name, input: undefined, output: ev.output, done: true, ts: nowIso },
+        ],
+      }
+    }
     case "usage":
-      // No-op. Token counts are surfaced in a future status bar pane.
       return state
     case "done":
       return { ...state, isStreaming: false }
     case "error":
-      return { ...state, isStreaming: false, error: ev.message }
+      return {
+        ...state,
+        isStreaming: false,
+        error: ev.message,
+        messages: [...state.messages, { kind: "system", text: `error: ${ev.message}`, ts: nowIso }],
+      }
     default:
-      // Exhaustiveness: TS narrows `ev` to `never` here. A new
-      // EngineEvent kind that doesn't update `EngineEvent` will crash
-      // the build; one that does update the union but doesn't add a
-      // case here is silently ignored (defensive — better than
-      // crashing the chat).
       return state
   }
 }
 
 /**
  * Push a system error from outside the engine event bus (e.g. a
- * `runTask` rejection that never made it to a stream). Sets
- * `isStreaming: false` so the spinner clears.
+ * `runTask` rejection). Adds a system row + clears streaming.
  */
-export function pushSystemError(state: ChatState, message: string): ChatState {
+export function pushSystemError(
+  state: ChatState,
+  message: string,
+  nowIso: string = new Date().toISOString(),
+): ChatState {
   return {
     ...state,
     isStreaming: false,
     error: message,
+    messages: [...state.messages, { kind: "system", text: `runTask failed: ${message}`, ts: nowIso }],
   }
 }
 
 /** Convenience alias — used at task switch. */
 export function reset(): ChatState {
   return createInitialState()
+}
+
+/* --------------------------------------------------------------------- */
+/*  Helpers                                                               */
+/* --------------------------------------------------------------------- */
+
+/**
+ * Convert a Claude-Code-shape `Message` (from `engine.readHistory`) to
+ * a render-friendly `ChatRow`. We coerce the `unknown` content into a
+ * string for display; tool blocks inside historical content are not
+ * rendered as separate `tool` rows in v1 (they re-appear as live tool
+ * events on resume runs).
+ */
+function messageToRow(m: Message): ChatRow {
+  const text = coerceContent(m.content)
+  if (m.role === "user") return { kind: "user", text, ts: m.timestamp }
+  if (m.role === "assistant") return { kind: "assistant", text, ts: m.timestamp }
+  // role === "system"
+  return { kind: "system", text, ts: m.timestamp }
+}
+
+/**
+ * Best-effort string coercion of a Message's `content`. Claude Code's
+ * JSONL stores it as either a string or a `[{type, text|...}]` block
+ * array. We extract `text` blocks and concat; everything else is
+ * dropped (tool blocks, thinking blocks).
+ */
+function coerceContent(content: unknown): string {
+  if (typeof content === "string") return content
+  if (Array.isArray(content)) {
+    const parts: string[] = []
+    for (const block of content) {
+      if (typeof block === "string") {
+        parts.push(block)
+        continue
+      }
+      if (block && typeof block === "object" && "text" in block) {
+        const t = (block as { text: unknown }).text
+        if (typeof t === "string") parts.push(t)
+      }
+    }
+    return parts.join("")
+  }
+  return ""
+}
+
+/** ES2023 `findLastIndex` polyfill (some target envs don't have it). */
+function findLastIndex<T>(arr: readonly T[], pred: (v: T) => boolean): number {
+  for (let i = arr.length - 1; i >= 0; i--) {
+    const v = arr[i]
+    if (v !== undefined && pred(v)) return i
+  }
+  return -1
 }

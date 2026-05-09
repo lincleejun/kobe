@@ -63,10 +63,18 @@
 import { TextAttributes } from "@opentui/core"
 import { type Accessor, For, Show, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js"
 import type { Orchestrator } from "../../../orchestrator/core.ts"
-import type { EngineEvent, Message } from "../../../types/engine.ts"
+import type { EngineEvent } from "../../../types/engine.ts"
 import { useTheme } from "../../context/theme"
 import { Loading } from "./Loading"
-import { type ChatState, applyEvent, createInitialState, pushDraftUser, pushSystemError, setPast } from "./store"
+import {
+  type ChatRow,
+  type ChatState,
+  applyEvent,
+  createInitialState,
+  pushSystemError,
+  pushUser,
+  setMessagesFromHistory,
+} from "./store"
 
 export type ChatProps = {
   orchestrator: Orchestrator
@@ -148,112 +156,29 @@ function collapseToOneLine(s: string, max: number): string {
 }
 
 /**
- * Walk a `live` event array and produce the render-ready row list. We
- * coalesce consecutive `assistant.delta` events into a single
- * "assistant" row — the renderer doesn't care that the engine emitted
- * the text in N chunks, the user just sees the concatenated string.
- *
- * Tool calls are paired in arrival order: each `tool.start` is matched
- * to the next `tool.result` with the same `name`. Unmatched starts
- * render with `output: undefined` (still running); unmatched results
- * (rare; happens if a result lands without a preceding start) render
- * standalone.
+ * Render a single chronological row from the unified `messages` array.
+ * Tool rows are collapsed by default — `expanded` and `onToggle` thread
+ * mouse + keyboard both into the same handler (kobe convention).
  */
-type LiveRow =
-  | { kind: "assistant"; text: string }
-  | { kind: "tool"; name: string; input: unknown; output: unknown | undefined; done: boolean; index: number }
-
-function buildLiveRows(live: readonly EngineEvent[]): LiveRow[] {
-  const rows: LiveRow[] = []
-  // We track per-name unfinished tool starts so a `tool.result` can
-  // back-fill the right entry. This is the only "correlation" we do,
-  // and it's done by walking `rows` not by a separate map — keeps the
-  // state right next to what's rendered.
-  for (const ev of live) {
-    if (ev.type === "assistant.delta") {
-      const last = rows[rows.length - 1]
-      if (last && last.kind === "assistant") {
-        // Coalesce consecutive deltas into the same row.
-        rows[rows.length - 1] = { kind: "assistant", text: last.text + ev.text }
-      } else {
-        rows.push({ kind: "assistant", text: ev.text })
-      }
-    } else if (ev.type === "tool.start") {
-      rows.push({
-        kind: "tool",
-        name: ev.name,
-        input: ev.input,
-        output: undefined,
-        done: false,
-        index: rows.length,
-      })
-    } else if (ev.type === "tool.result") {
-      // Walk backward for the most recent unfinished tool with this name.
-      let matched = false
-      for (let i = rows.length - 1; i >= 0; i--) {
-        const r = rows[i]
-        if (r && r.kind === "tool" && !r.done && r.name === ev.name) {
-          rows[i] = { ...r, output: ev.output, done: true }
-          matched = true
-          break
-        }
-      }
-      if (!matched) {
-        rows.push({
-          kind: "tool",
-          name: ev.name,
-          input: undefined,
-          output: ev.output,
-          done: true,
-          index: rows.length,
-        })
-      }
-    }
-    // usage / done / error don't contribute rows; the chat renders
-    // pending/error from `state.isStreaming` and `state.error`.
-  }
-  return rows
-}
-
-/**
- * Render one history message row. We only display user/assistant text;
- * Claude Code's JSONL also contains tool-related entries which we skip
- * in v1 — they re-appear via live events on resume, and rendering them
- * properly is Wave 4 polish.
- */
-function HistoryRow(props: { msg: Message }) {
-  const { theme } = useTheme()
-  const role = props.msg.role
-  const text = createMemo(() => coerceHistoryContent(props.msg.content))
-  if (role !== "user" && role !== "assistant") return null
-  // Empty content = a tool-only block; skip.
-  return (
-    <Show when={text().length > 0}>
-      <box paddingTop={1}>
-        <text fg={role === "user" ? theme.accent : theme.success} attributes={TextAttributes.BOLD}>
-          {role === "user" ? "you" : "assistant"}
-        </text>
-        <text fg={theme.text}>{text()}</text>
-      </box>
-    </Show>
-  )
-}
-
-/**
- * Render one live row. Tool calls are collapsed by default; the parent
- * passes `expanded` and an `onToggle` shared between keyboard (composer
- * `enter` on empty draft) and mouse (`onMouseUp` on the tool row). Per
- * kobe's convention, every keyboard-interactive surface is also
- * click-interactive — same handler, both input modes.
- */
-function LiveRowView(props: {
-  row: LiveRow
+function MessageRow(props: {
+  row: ChatRow
   isLastAssistant: boolean
   isStreaming: boolean
+  index: number
   expanded: boolean
   onToggle: () => void
 }) {
   const { theme } = useTheme()
+  if (props.row.kind === "user") {
+    return (
+      <box paddingTop={1}>
+        <text fg={theme.accent} attributes={TextAttributes.BOLD}>
+          you
+        </text>
+        <text fg={theme.text}>{props.row.text}</text>
+      </box>
+    )
+  }
   if (props.row.kind === "assistant") {
     return (
       <box paddingTop={1}>
@@ -262,11 +187,19 @@ function LiveRowView(props: {
         </text>
         <text fg={theme.text}>
           {props.row.text}
-          {/* Streaming cursor: only on the last assistant row while a
-              turn is still in flight. We use a thin vertical bar
-              borrowed from terminal cursor convention. */}
+          {/* Streaming cursor on the last assistant row mid-turn. */}
           {props.isLastAssistant && props.isStreaming ? "▏" : ""}
         </text>
+      </box>
+    )
+  }
+  if (props.row.kind === "system") {
+    return (
+      <box paddingTop={1}>
+        <text fg={theme.error} attributes={TextAttributes.BOLD}>
+          system
+        </text>
+        <text fg={theme.textMuted}>{props.row.text}</text>
       </box>
     )
   }
@@ -276,9 +209,6 @@ function LiveRowView(props: {
   const arrow = props.expanded ? "▼" : "▶"
   return (
     <box paddingTop={1}>
-      {/* Click target — onMouseUp is opentui's "click released" event
-          (Stream F's sidebar uses the same convention). The `enter`
-          binding in the composer below routes to the same handler. */}
       <text fg={theme.textMuted} onMouseUp={() => props.onToggle()}>
         {arrow} {r.name}({previewToolInput(r.input)}) — {status}
       </text>
@@ -337,37 +267,13 @@ export function Chat(props: ChatProps) {
         setExpandedToolIndex(null)
         if (!taskId) return undefined
 
-        // Subscribe live events first so any deltas that fire during
-        // the readHistory await don't get lost.
+        // Subscribe live events. Each event mutates the unified
+        // `messages` array (user submits append directly, assistant
+        // deltas append/coalesce, tool starts/results pair by name).
+        // No re-read on done — the messages array IS the chronological
+        // record while the session is live.
         const unsubscribe = props.orchestrator.subscribeEvents(taskId, (ev: EngineEvent) => {
           setState((s) => applyEvent(s, ev))
-          // After a turn finishes, reload past from JSONL. The single-
-          // draftUser model can only hold ONE in-flight user message at
-          // a time — without this reload, the user's turn-N prompt gets
-          // overwritten by turn-N+1's pushDraftUser, and turn N's
-          // user/assistant pair vanishes from the visible history.
-          //
-          // By the time `done` fires, Claude Code has flushed the turn
-          // to JSONL (verified — readHistory after done returns the
-          // turn's records). We re-fetch and replace `past` with the
-          // canonical disk view; `setPast` also clears live + draftUser
-          // so the next turn starts from a known-clean state.
-          if (ev.type === "done" || ev.type === "error") {
-            const liveTaskId = props.taskId()
-            if (liveTaskId !== taskId) return
-            const t = props.orchestrator.getTask(taskId)
-            const sid = t?.sessionId
-            if (!sid) return
-            props.orchestrator
-              .readHistory(sid)
-              .then((past) => {
-                if (props.taskId() !== taskId) return
-                setState((s) => setPast(s, past))
-              })
-              .catch(() => {
-                /* ignore — keep showing current live snapshot */
-              })
-          }
         })
 
         // Load history if the task already has a sessionId. Brand-new
@@ -381,7 +287,7 @@ export function Chat(props: ChatProps) {
             .then((past) => {
               // Only apply if we haven't switched tasks since.
               if (props.taskId() !== taskId) return
-              setState((s) => setPast(s, past))
+              setState((s) => setMessagesFromHistory(s, past))
             })
             .catch((err) => {
               setState((s) => pushSystemError(s, `history load failed: ${stringifyErr(err)}`))
@@ -434,7 +340,7 @@ export function Chat(props: ChatProps) {
       return
     }
     setDraft("")
-    setState((s) => pushDraftUser(s, text))
+    setState((s) => pushUser(s, text))
     try {
       await props.orchestrator.runTask(taskId, text)
     } catch (err) {
@@ -442,37 +348,28 @@ export function Chat(props: ChatProps) {
     }
   }
 
-  // Render-derived: live rows from the event buffer.
-  const liveRows = createMemo(() => buildLiveRows(state().live))
-
-  // Find the index of the last "assistant" row in liveRows so we can
-  // anchor the streaming cursor there.
+  // Render-derived: index of the trailing assistant row (anchor for the
+  // streaming cursor) and trailing tool row (anchor for "enter expands").
   const lastAssistantIdx = createMemo(() => {
-    const rows = liveRows()
-    for (let i = rows.length - 1; i >= 0; i--) {
-      const r = rows[i]
+    const msgs = state().messages
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const r = msgs[i]
       if (r && r.kind === "assistant") return i
     }
     return -1
   })
 
-  // True iff the loading indicator should render. We show "thinking"
-  // when a turn is in flight AND we have no in-flight assistant text
-  // yet. Once text starts flowing, the streaming cursor takes over and
-  // the spinner gets out of the way.
   const showThinking = createMemo(() => {
     if (!state().isStreaming) return false
-    // If there's any assistant row in `live`, the cursor is rendering;
-    // hide the spinner.
+    // Spinner only when no assistant text yet — once text streams in,
+    // the cursor takes over and the spinner gets out of the way.
     return lastAssistantIdx() === -1
   })
 
-  // The most recently-fired tool index (for the "press enter to expand"
-  // affordance). null if there are no tool rows in the current live.
   const lastToolIndex = createMemo(() => {
-    const rows = liveRows()
-    for (let i = rows.length - 1; i >= 0; i--) {
-      const r = rows[i]
+    const msgs = state().messages
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const r = msgs[i]
       if (r && r.kind === "tool") return i
     }
     return null
@@ -523,34 +420,20 @@ export function Chat(props: ChatProps) {
           }}
         >
           <box paddingRight={1} gap={0}>
-            {/* Empty placeholder when we have neither past nor live. */}
-            <Show when={state().past.length === 0 && state().live.length === 0 && !state().draftUser}>
+            {/* Empty placeholder when we have nothing to show. */}
+            <Show when={state().messages.length === 0}>
               <box paddingTop={2}>
                 <text fg={theme.textMuted}>Type a prompt below.</text>
               </box>
             </Show>
 
-            {/* Persisted history. */}
-            <For each={state().past}>{(msg) => <HistoryRow msg={msg} />}</For>
-
-            {/* Just-submitted user row (lives only between submit and
-                next setPast / task-switch). */}
-            <Show when={state().draftUser}>
-              {(draftUser) => (
-                <box paddingTop={1}>
-                  <text fg={theme.accent} attributes={TextAttributes.BOLD}>
-                    you
-                  </text>
-                  <text fg={theme.text}>{draftUser().text}</text>
-                </box>
-              )}
-            </Show>
-
-            {/* Live rows from the current run. */}
-            <For each={liveRows()}>
+            {/* Single chronological list — user, assistant, tool, system
+                rows in arrival order. */}
+            <For each={state().messages}>
               {(row, i) => (
-                <LiveRowView
+                <MessageRow
                   row={row}
+                  index={i()}
                   isLastAssistant={i() === lastAssistantIdx()}
                   isStreaming={state().isStreaming}
                   expanded={row.kind === "tool" && expandedToolIndex() === i()}

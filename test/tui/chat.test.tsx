@@ -1,22 +1,16 @@
 /**
- * Wave 3 Stream G — chat state-machine unit tests.
+ * Unit tests for `src/tui/panes/chat/store.ts`.
  *
- * `store.ts` has zero Solid/opentui imports, so we can exercise it
- * directly under vitest's Node runtime. The full Chat component itself
- * uses opentui native bindings and is proved by the G3 behavior test
- * (`test/behavior/g3-chat.test.ts`); here we cover the pure invariants
- * that determine whether the chat shows the right text in the right
- * order.
- *
- * Why this is necessary even though we have a behavior test:
- *   - PTY-based behavior tests are slow and binary ("did it render or
- *     not"). State-machine bugs that only surface under specific event
- *     sequences (e.g. tool.start after a partial assistant turn) are
- *     much cheaper to catch here than to debug from a tmux capture.
- *   - The pivot history of this module — full message store → ephemeral
- *     inFlight → simple two-array — means the boundary between "what
- *     the store does" and "what the renderer derives" needs to be
- *     spelled out concretely. These tests are the spec.
+ * The store is a single chronological-messages model. These tests pin
+ * every behavior the renderer relies on:
+ *   - createInitialState — empty messages, not streaming, no error.
+ *   - setMessagesFromHistory — engine Message[] → ChatRow[].
+ *   - pushUser — append a user row + flip isStreaming.
+ *   - applyEvent — assistant.delta append/coalesce, tool start/result
+ *     pairing, usage no-op, done flips streaming, error → system row.
+ *   - pushSystemError — surface external errors.
+ *   - Multi-turn integration: user prompts persist across turns
+ *     (regression guard for the original draftUser-overwrite bug).
  */
 
 import { describe, expect, test } from "vitest"
@@ -24,325 +18,214 @@ import {
   type ChatState,
   applyEvent,
   createInitialState,
-  pushDraftUser,
   pushSystemError,
+  pushUser,
   reset,
-  setPast,
+  setMessagesFromHistory,
 } from "../../src/tui/panes/chat/store.ts"
 import type { EngineEvent, Message } from "../../src/types/engine.ts"
 
-// ---------------------------------------------------------------------
-// helpers
-// ---------------------------------------------------------------------
-
-function delta(text: string): EngineEvent {
-  return { type: "assistant.delta", text }
-}
-function start(name: string, input: unknown = {}): EngineEvent {
-  return { type: "tool.start", name, input }
-}
-function result(name: string, output: unknown = "ok"): EngineEvent {
-  return { type: "tool.result", name, output }
-}
-function userMsg(content: unknown, ts = "2026-05-08T00:00:00.000Z"): Message {
-  return { role: "user", content, timestamp: ts, sessionId: "s" }
-}
-function asstMsg(content: unknown, ts = "2026-05-08T00:00:01.000Z"): Message {
-  return { role: "assistant", content, timestamp: ts, sessionId: "s" }
-}
-
-// ---------------------------------------------------------------------
-// createInitialState — the empty / mounted shape
-// ---------------------------------------------------------------------
+const FIXED_TS = "2026-05-09T00:00:00.000Z"
 
 describe("createInitialState", () => {
-  test("returns empty arrays + non-streaming + no error/draft", () => {
+  test("returns empty messages, not streaming, no error", () => {
     const s = createInitialState()
-    expect(s.past).toEqual([])
-    expect(s.live).toEqual([])
-    expect(s.draftUser).toBeNull()
+    expect(s.messages).toEqual([])
     expect(s.isStreaming).toBe(false)
     expect(s.error).toBeNull()
   })
 
-  test("each call returns a fresh object (no shared references)", () => {
-    const a = createInitialState()
-    const b = createInitialState()
-    expect(a).not.toBe(b)
-    expect(a.past).not.toBe(b.past)
-    expect(a.live).not.toBe(b.live)
-  })
-
-  test("reset() is an alias for createInitialState()", () => {
-    const a = reset()
-    const b = createInitialState()
-    expect(a).toEqual(b)
+  test("`reset` is an alias", () => {
+    expect(reset()).toEqual(createInitialState())
   })
 })
 
-// ---------------------------------------------------------------------
-// setPast — load history, clear ephemeral buffers
-// ---------------------------------------------------------------------
-
-describe("setPast", () => {
-  test("replaces past with the given message list and clears live + draft", () => {
-    let s = createInitialState()
-    s = pushDraftUser(s, "ping")
-    s = applyEvent(s, delta("partial"))
-    expect(s.live).toHaveLength(1)
-    expect(s.draftUser).not.toBeNull()
-
-    const past = [userMsg("hello"), asstMsg("hi")]
-    s = setPast(s, past)
-    expect(s.past).toEqual(past)
-    expect(s.live).toEqual([])
-    expect(s.draftUser).toBeNull()
+describe("setMessagesFromHistory", () => {
+  test("converts user/assistant Messages to chronological ChatRows", () => {
+    const past: Message[] = [
+      { role: "user", content: "hi", timestamp: "2026-05-09T00:00:00Z", sessionId: "s" },
+      { role: "assistant", content: "hello!", timestamp: "2026-05-09T00:00:01Z", sessionId: "s" },
+      { role: "user", content: "how are you", timestamp: "2026-05-09T00:00:02Z", sessionId: "s" },
+    ]
+    const s = setMessagesFromHistory(createInitialState(), past)
+    expect(s.messages).toHaveLength(3)
+    expect(s.messages[0]).toEqual({ kind: "user", text: "hi", ts: "2026-05-09T00:00:00Z" })
+    expect(s.messages[1]).toEqual({ kind: "assistant", text: "hello!", ts: "2026-05-09T00:00:01Z" })
+    expect(s.messages[2]).toEqual({ kind: "user", text: "how are you", ts: "2026-05-09T00:00:02Z" })
   })
 
-  test("does NOT touch isStreaming or error (those are independent surfaces)", () => {
-    let s = createInitialState()
-    s = pushSystemError(s, "boom")
-    s = { ...s, isStreaming: true }
-    const past = [userMsg("hi")]
-    s = setPast(s, past)
-    expect(s.isStreaming).toBe(true)
-    expect(s.error).toBe("boom")
+  test("extracts text blocks from array-shaped content", () => {
+    const past: Message[] = [
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "hello " },
+          { type: "text", text: "world" },
+          { type: "tool_use", id: "t1", name: "Bash" },
+        ],
+        timestamp: FIXED_TS,
+        sessionId: "s",
+      },
+    ]
+    const s = setMessagesFromHistory(createInitialState(), past)
+    expect(s.messages[0]).toEqual({ kind: "assistant", text: "hello world", ts: FIXED_TS })
   })
 })
 
-// ---------------------------------------------------------------------
-// pushDraftUser — submit
-// ---------------------------------------------------------------------
-
-describe("pushDraftUser", () => {
-  test("sets isStreaming=true, stamps draftUser, clears prior error", () => {
-    const initial: ChatState = {
-      ...createInitialState(),
-      error: "old failure",
-    }
-    const s = pushDraftUser(initial, "hello world", "2026-05-08T01:00:00.000Z")
+describe("pushUser", () => {
+  test("appends a user row + flips isStreaming on + clears error", () => {
+    const start: ChatState = { ...createInitialState(), error: "old" }
+    const s = pushUser(start, "hi", FIXED_TS)
+    expect(s.messages).toEqual([{ kind: "user", text: "hi", ts: FIXED_TS }])
     expect(s.isStreaming).toBe(true)
     expect(s.error).toBeNull()
-    expect(s.draftUser).toEqual({ text: "hello world", ts: "2026-05-08T01:00:00.000Z" })
   })
 
-  test("does not touch past or live", () => {
-    let s = createInitialState()
-    const past = [userMsg("prior")]
-    s = setPast(s, past)
-    s = applyEvent(s, delta("trailing"))
-    const before = s.live
-    const after = pushDraftUser(s, "new")
-    expect(after.past).toBe(s.past)
-    expect(after.live).toBe(before)
-  })
-
-  test("uses Date.now()-derived ISO when ts omitted", () => {
-    const s = pushDraftUser(createInitialState(), "hi")
-    expect(s.draftUser?.ts).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/)
+  test("keeps prior history intact (does NOT overwrite earlier user rows)", () => {
+    let s = pushUser(createInitialState(), "first", FIXED_TS)
+    s = applyEvent(s, { type: "assistant.delta", text: "ok" }, FIXED_TS)
+    s = applyEvent(s, { type: "done" }, FIXED_TS)
+    s = pushUser(s, "second", FIXED_TS)
+    expect(s.messages.filter((r) => r.kind === "user")).toHaveLength(2)
+    expect(s.messages.map((r) => r.kind)).toEqual(["user", "assistant", "user"])
   })
 })
 
-// ---------------------------------------------------------------------
-// applyEvent — invariants per event type
-// ---------------------------------------------------------------------
-
 describe("applyEvent — assistant.delta", () => {
-  test("appends to live + sets isStreaming=true (defensive)", () => {
-    let s = createInitialState()
-    s = applyEvent(s, delta("Hello"))
-    expect(s.live).toEqual([{ type: "assistant.delta", text: "Hello" }])
+  test("appends an assistant row when no prior assistant in trail", () => {
+    const start = pushUser(createInitialState(), "hi", FIXED_TS)
+    const s = applyEvent(start, { type: "assistant.delta", text: "hello" }, FIXED_TS)
+    expect(s.messages).toHaveLength(2)
+    expect(s.messages[1]).toEqual({ kind: "assistant", text: "hello", ts: FIXED_TS })
     expect(s.isStreaming).toBe(true)
   })
 
-  test("multiple deltas accumulate in arrival order", () => {
-    let s = createInitialState()
-    s = pushDraftUser(s, "hi")
-    s = applyEvent(s, delta("Hello"))
-    s = applyEvent(s, delta(" "))
-    s = applyEvent(s, delta("world"))
-    expect(s.live.map((e) => (e.type === "assistant.delta" ? e.text : null))).toEqual(["Hello", " ", "world"])
+  test("coalesces consecutive deltas into one assistant row", () => {
+    let s = pushUser(createInitialState(), "hi", FIXED_TS)
+    s = applyEvent(s, { type: "assistant.delta", text: "Hel" }, FIXED_TS)
+    s = applyEvent(s, { type: "assistant.delta", text: "lo " }, FIXED_TS)
+    s = applyEvent(s, { type: "assistant.delta", text: "world" }, FIXED_TS)
+    expect(s.messages.filter((r) => r.kind === "assistant")).toHaveLength(1)
+    expect((s.messages[1] as { text: string }).text).toBe("Hello world")
+  })
+
+  test("does NOT coalesce across a tool boundary", () => {
+    let s = pushUser(createInitialState(), "hi", FIXED_TS)
+    s = applyEvent(s, { type: "assistant.delta", text: "first" }, FIXED_TS)
+    s = applyEvent(s, { type: "tool.start", name: "Bash", input: { cmd: "ls" } }, FIXED_TS)
+    s = applyEvent(s, { type: "assistant.delta", text: "second" }, FIXED_TS)
+    expect(s.messages.filter((r) => r.kind === "assistant")).toHaveLength(2)
   })
 })
 
 describe("applyEvent — tool.start / tool.result", () => {
-  test("tool.start appends without changing isStreaming", () => {
-    let s = pushDraftUser(createInitialState(), "go")
-    const before = s.isStreaming
-    s = applyEvent(s, start("Read", { file: "a.ts" }))
-    expect(s.live).toHaveLength(1)
-    expect(s.live[0]).toEqual({ type: "tool.start", name: "Read", input: { file: "a.ts" } })
-    expect(s.isStreaming).toBe(before)
+  test("tool.start appends an unfinished tool row", () => {
+    const s = applyEvent(createInitialState(), { type: "tool.start", name: "Bash", input: { cmd: "ls" } }, FIXED_TS)
+    expect(s.messages).toHaveLength(1)
+    expect(s.messages[0]).toMatchObject({ kind: "tool", name: "Bash", done: false })
   })
 
-  test("tool.result appends as a separate event (correlation is render-time)", () => {
-    let s = pushDraftUser(createInitialState(), "go")
-    s = applyEvent(s, start("Read"))
-    s = applyEvent(s, result("Read", { content: "hi" }))
-    expect(s.live).toHaveLength(2)
-    // Both events are preserved in arrival order — the renderer pairs
-    // them by walking the array.
-    expect(s.live[0]?.type).toBe("tool.start")
-    expect(s.live[1]?.type).toBe("tool.result")
+  test("tool.result patches the most recent unfinished tool with same name", () => {
+    let s = createInitialState()
+    s = applyEvent(s, { type: "tool.start", name: "Bash", input: { cmd: "ls" } }, FIXED_TS)
+    s = applyEvent(s, { type: "tool.result", name: "Bash", output: "ok" }, FIXED_TS)
+    expect(s.messages).toHaveLength(1)
+    expect(s.messages[0]).toMatchObject({ kind: "tool", name: "Bash", done: true, output: "ok" })
   })
 
-  test("interleaving deltas and tool calls preserves arrival order", () => {
-    let s = pushDraftUser(createInitialState(), "go")
-    s = applyEvent(s, delta("about to call "))
-    s = applyEvent(s, start("Bash", { cmd: "ls" }))
-    s = applyEvent(s, result("Bash", "a\nb"))
-    s = applyEvent(s, delta("done"))
-    const types = s.live.map((e) => e.type)
-    expect(types).toEqual(["assistant.delta", "tool.start", "tool.result", "assistant.delta"])
+  test("tool.result with no preceding start appends a standalone row", () => {
+    const s = applyEvent(createInitialState(), { type: "tool.result", name: "Bash", output: "ok" }, FIXED_TS)
+    expect(s.messages).toHaveLength(1)
+    expect(s.messages[0]).toMatchObject({ kind: "tool", name: "Bash", done: true, input: undefined })
+  })
+
+  test("tool.result pairs with the LAST unfinished start of that name", () => {
+    let s = createInitialState()
+    s = applyEvent(s, { type: "tool.start", name: "Bash", input: 1 }, FIXED_TS)
+    s = applyEvent(s, { type: "tool.start", name: "Bash", input: 2 }, FIXED_TS)
+    s = applyEvent(s, { type: "tool.result", name: "Bash", output: "for-2" }, FIXED_TS)
+    expect(s.messages).toHaveLength(2)
+    expect(s.messages[0]).toMatchObject({ done: false, input: 1 })
+    expect(s.messages[1]).toMatchObject({ done: true, input: 2, output: "for-2" })
   })
 })
 
 describe("applyEvent — usage / done / error", () => {
   test("usage is a no-op", () => {
-    const s = createInitialState()
-    const after = applyEvent(s, { type: "usage", input_tokens: 1, output_tokens: 2 })
-    expect(after).toEqual(s)
+    const start = pushUser(createInitialState(), "hi", FIXED_TS)
+    const s = applyEvent(start, { type: "usage", input_tokens: 1, output_tokens: 2 }, FIXED_TS)
+    expect(s.messages).toEqual(start.messages)
+    expect(s.isStreaming).toBe(start.isStreaming)
   })
 
-  test("done clears isStreaming but keeps live + past intact", () => {
-    let s = pushDraftUser(createInitialState(), "go")
-    s = applyEvent(s, delta("hello"))
-    expect(s.isStreaming).toBe(true)
-    const liveBefore = s.live
-    s = applyEvent(s, { type: "done" })
+  test("done flips isStreaming off, leaves messages alone", () => {
+    let s = pushUser(createInitialState(), "hi", FIXED_TS)
+    s = applyEvent(s, { type: "assistant.delta", text: "ok" }, FIXED_TS)
+    const before = s.messages
+    s = applyEvent(s, { type: "done" }, FIXED_TS)
     expect(s.isStreaming).toBe(false)
-    // live preserved — the trailing assistant text stays on screen.
-    expect(s.live).toBe(liveBefore)
+    expect(s.messages).toEqual(before)
   })
 
-  test("error clears isStreaming and writes the error banner", () => {
-    let s = pushDraftUser(createInitialState(), "go")
-    s = applyEvent(s, { type: "error", message: "kaboom" })
+  test("error appends a system row + sets banner + flips streaming off", () => {
+    let s = pushUser(createInitialState(), "hi", FIXED_TS)
+    s = applyEvent(s, { type: "error", message: "engine exploded" }, FIXED_TS)
     expect(s.isStreaming).toBe(false)
-    expect(s.error).toBe("kaboom")
-  })
-
-  test("error preserves prior live events (so the user sees what came before)", () => {
-    let s = pushDraftUser(createInitialState(), "go")
-    s = applyEvent(s, delta("partial answer"))
-    s = applyEvent(s, { type: "error", message: "rate-limited" })
-    expect(s.live).toHaveLength(1)
-    expect(s.live[0]?.type).toBe("assistant.delta")
+    expect(s.error).toBe("engine exploded")
+    const last = s.messages[s.messages.length - 1]
+    expect(last).toMatchObject({ kind: "system", text: "error: engine exploded" })
   })
 })
 
 describe("applyEvent — purity", () => {
-  test("never mutates the input state", () => {
-    const s = createInitialState()
-    const snapshot = JSON.stringify(s)
-    applyEvent(s, delta("x"))
-    applyEvent(s, start("Read"))
-    applyEvent(s, { type: "done" })
-    expect(JSON.stringify(s)).toBe(snapshot)
-  })
-
-  test("returns a new live array reference for events that touch it", () => {
-    const s = createInitialState()
-    const after = applyEvent(s, delta("x"))
-    expect(after.live).not.toBe(s.live)
+  test("does not mutate input state", () => {
+    const start = createInitialState()
+    const before = JSON.stringify(start)
+    applyEvent(start, { type: "assistant.delta", text: "x" }, FIXED_TS)
+    expect(JSON.stringify(start)).toBe(before)
   })
 })
-
-// ---------------------------------------------------------------------
-// pushSystemError — orchestrator-level failures
-// ---------------------------------------------------------------------
 
 describe("pushSystemError", () => {
-  test("clears isStreaming + writes the error", () => {
-    let s = pushDraftUser(createInitialState(), "go")
-    s = pushSystemError(s, "runTask failed: boom")
+  test("appends a system row + banner + clears streaming", () => {
+    let s = pushUser(createInitialState(), "hi", FIXED_TS)
+    s = pushSystemError(s, "runTask failed!", FIXED_TS)
     expect(s.isStreaming).toBe(false)
-    expect(s.error).toBe("runTask failed: boom")
-  })
-
-  test("keeps draftUser + live so the user sees what they tried to send", () => {
-    let s = createInitialState()
-    s = pushDraftUser(s, "ping")
-    s = applyEvent(s, delta("partial"))
-    const before = { draftUser: s.draftUser, live: s.live }
-    s = pushSystemError(s, "boom")
-    expect(s.draftUser).toBe(before.draftUser)
-    expect(s.live).toBe(before.live)
+    expect(s.error).toBe("runTask failed!")
+    const last = s.messages[s.messages.length - 1]
+    expect(last).toMatchObject({ kind: "system" })
+    expect((last as { text: string }).text).toContain("runTask failed!")
   })
 })
 
-// ---------------------------------------------------------------------
-// Multi-turn / task-switch scenario tests — these exercise the
-// invariants in plain English: "if a user has a turn, then submits
-// again, then switches tasks, the state ends up where we expect."
-// ---------------------------------------------------------------------
-
 describe("integration scenarios", () => {
-  test("happy-path single turn: submit → deltas → done", () => {
+  test("multi-turn conversation preserves all user prompts", () => {
     let s = createInitialState()
-    s = pushDraftUser(s, "hi")
-    expect(s.isStreaming).toBe(true)
-    expect(s.draftUser?.text).toBe("hi")
+    s = pushUser(s, "first", "2026-05-09T00:00:00Z")
+    s = applyEvent(s, { type: "assistant.delta", text: "ok" } satisfies EngineEvent, "2026-05-09T00:00:01Z")
+    s = applyEvent(s, { type: "done" } satisfies EngineEvent, "2026-05-09T00:00:02Z")
+    s = pushUser(s, "second", "2026-05-09T00:00:03Z")
+    s = applyEvent(s, { type: "assistant.delta", text: "ack" } satisfies EngineEvent, "2026-05-09T00:00:04Z")
+    s = applyEvent(s, { type: "done" } satisfies EngineEvent, "2026-05-09T00:00:05Z")
 
-    s = applyEvent(s, delta("Hello"))
-    s = applyEvent(s, delta(" world"))
-    expect(s.isStreaming).toBe(true)
-    expect(s.live).toHaveLength(2)
-
-    s = applyEvent(s, { type: "done" })
+    expect(s.messages.map((r) => r.kind)).toEqual(["user", "assistant", "user", "assistant"])
+    expect((s.messages[0] as { text: string }).text).toBe("first")
+    expect((s.messages[2] as { text: string }).text).toBe("second")
     expect(s.isStreaming).toBe(false)
-    // draftUser and live both still rendered — they get cleared on
-    // the next task switch / setPast.
-    expect(s.draftUser).not.toBeNull()
-    expect(s.live).toHaveLength(2)
   })
 
-  test("multi-turn: prior turn lingers in live until next setPast", () => {
-    let s = createInitialState()
-    s = pushDraftUser(s, "first")
-    s = applyEvent(s, delta("answer one"))
-    s = applyEvent(s, { type: "done" })
+  test("history load + live events produce a single chronological list", () => {
+    const past: Message[] = [
+      { role: "user", content: "old user", timestamp: "2026-05-09T00:00:00Z", sessionId: "s" },
+      { role: "assistant", content: "old assistant", timestamp: "2026-05-09T00:00:01Z", sessionId: "s" },
+    ]
+    let s = setMessagesFromHistory(createInitialState(), past)
+    s = pushUser(s, "new prompt", "2026-05-09T00:01:00Z")
+    s = applyEvent(s, { type: "assistant.delta", text: "new reply" }, "2026-05-09T00:01:01Z")
+    s = applyEvent(s, { type: "done" }, "2026-05-09T00:01:02Z")
 
-    // Second submit should set isStreaming again. Per the simplified
-    // model, we don't mid-session re-read; live keeps growing.
-    s = pushDraftUser(s, "second")
-    expect(s.isStreaming).toBe(true)
-    expect(s.error).toBeNull()
-    s = applyEvent(s, delta("answer two"))
-    s = applyEvent(s, { type: "done" })
-    // live now has both turns' deltas, in order.
-    expect(s.live.map((e) => (e.type === "assistant.delta" ? e.text : null)).filter(Boolean)).toEqual([
-      "answer one",
-      "answer two",
-    ])
-  })
-
-  test("task switch: createInitialState → setPast wipes live + draftUser", () => {
-    let s = createInitialState()
-    s = pushDraftUser(s, "task A")
-    s = applyEvent(s, delta("A reply"))
-
-    // Simulate switch:
-    s = createInitialState()
-    expect(s.live).toEqual([])
-    expect(s.draftUser).toBeNull()
-    expect(s.past).toEqual([])
-
-    // Then load history for task B:
-    s = setPast(s, [userMsg("B prior"), asstMsg("B reply")])
-    expect(s.past).toHaveLength(2)
-    expect(s.live).toEqual([])
-    expect(s.draftUser).toBeNull()
-  })
-
-  test("error mid-turn leaves prior deltas visible for review", () => {
-    let s = createInitialState()
-    s = pushDraftUser(s, "do thing")
-    s = applyEvent(s, delta("starting…"))
-    s = applyEvent(s, { type: "error", message: "context window full" })
-    expect(s.error).toBe("context window full")
-    expect(s.isStreaming).toBe(false)
-    expect(s.live).toHaveLength(1)
-    expect(s.draftUser?.text).toBe("do thing")
+    expect(s.messages.map((r) => r.kind)).toEqual(["user", "assistant", "user", "assistant"])
+    expect(s.messages[0]).toMatchObject({ text: "old user" })
+    expect(s.messages[3]).toMatchObject({ text: "new reply" })
   })
 })
