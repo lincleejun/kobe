@@ -1,48 +1,23 @@
 /**
- * G2 application shell — TEMPORARY SCAFFOLDING.
+ * kobe application shell — full 5-pane Wave 3 layout.
  *
- * EXPLICITLY THROWAWAY. Wave 3 owns the real 5-pane layout (preview,
- * file tree, terminal, chat). This file wires the bare minimum that
- * proves end-to-end orchestration: sidebar (Stream F) + chat
- * placeholder + new-task dialog + the Orchestrator (Stream E).
+ * Layout (left → right): Sidebar | Chat | RightColumn{ FileTree, Preview, Terminal }
  *
- * Why a separate file from `tui/index.tsx`: the prior `index.tsx`
- * mounts a banner-only Shell. We don't delete it (CLAUDE.md hard rule)
- * — we keep `startTui()` there but switch what it renders. This file
- * is the new mount target; `index.tsx`'s Shell is now unused but
- * preserved for the historical commit log.
+ * Wiring:
+ *   - Active task is selected in Sidebar (Stream F) and propagates a
+ *     `selectedId` Solid signal that drives every other pane.
+ *   - `worktreePath` is derived from the active task and feeds FileTree
+ *     (Stream H), Preview (Stream I), and Terminal (Stream J).
+ *   - FileTree's `onOpenFile` calls into Preview's imperative API, captured
+ *     once via the `onOpen` callback.
+ *   - Terminal owns one pty per task (resolved Wave 1 decision §5).
  *
  * Engine selection:
- *   - Default: real `ClaudeCodeLocal` (production binary).
- *   - With `KOBE_TEST_ENGINE=fake`: a `FakeAIEngine` instance, mounted
- *     onto `(globalThis as any).__KOBE_FAKE_ENGINE__` as the side-channel
- *     for the G2 behavior test. The behavior test runs the real kobe
- *     binary in a PTY but pulls the fake engine off globalThis to
- *     script events. The PTY child shares globalThis with the test only
- *     because vitest spawns kobe as a subprocess — actually it doesn't.
- *
- *     CORRECTION: Vitest spawns kobe in a *child process* via the PTY
- *     driver. globalThis isn't shared across processes. So the
- *     side-channel mechanism is: when `KOBE_TEST_ENGINE=fake`, kobe
- *     spawns a tiny HTTP server on a free port, writes the port to
- *     `process.env.KOBE_TEST_FAKE_PORT` (which the test reads via the
- *     PTY's environment, but the PTY env was set BY the test, so the
- *     test already knows the port — actually it doesn't, the port is
- *     allocated inside kobe).
- *
- *     CORRECTION 2: We pick a fixed strategy. The test PRE-CHOOSES the
- *     port and passes it via `KOBE_TEST_FAKE_PORT`. Kobe binds the
- *     fake-engine HTTP server on that port. The test scripts events
- *     by POSTing JSON to it. This avoids any need for kobe to publish
- *     a port back to the test.
- *
- *     The endpoints:
- *       POST /script    body: { sessionId, events: EngineEvent[] }
- *       POST /finish    body: { sessionId }
- *       GET  /sessions  body: { sessions: string[] }   (debug)
- *
- *     This is intentionally minimal. The whole thing is deleted in
- *     Wave 3 along with this file.
+ *   - Default: `ClaudeCodeLocal` (subprocess wrapper around `claude` CLI).
+ *   - With `KOBE_TEST_ENGINE=fake`: in-process `FakeAIEngine` plus a tiny
+ *     HTTP side-channel on `KOBE_TEST_FAKE_PORT` for behavior tests to
+ *     script events. The test pre-allocates the port and POSTs JSON to
+ *     `/script` and `/finish`. Production never sets the env vars.
  */
 
 import { homedir } from "node:os"
@@ -63,7 +38,10 @@ import { SyncProvider } from "./context/sync"
 import { ThemeProvider, useTheme } from "./context/theme"
 import { useBindings } from "./lib/keymap"
 import { Chat } from "./panes/chat/Chat"
+import { FileTree } from "./panes/filetree"
+import { Preview, type PreviewApi } from "./panes/preview"
 import { Sidebar } from "./panes/sidebar/Sidebar"
+import { Terminal } from "./panes/terminal"
 import { type DialogContext, DialogProvider, useDialog } from "./ui/dialog"
 
 const DEFAULT_THEME = "tokyonight"
@@ -316,6 +294,22 @@ function Shell(props: AppDeps) {
     if (pp.taskId !== selectedId()) return undefined
     return pp.prompt
   })
+  // Per-task accessors for the right-column panes. FileTree + Preview key
+  // off `worktreePath`; Terminal keys off both `cwd` and `taskId` (so the
+  // pty registry can deduplicate per task per the resolved Wave-1 decision).
+  const worktreePathAcc = createMemo<string | null>(() => activeTask()?.worktreePath ?? null)
+  const taskIdNullAcc = createMemo<string | null>(() => selectedId())
+  // Diff base — for v1, just compare against HEAD (working-tree changes).
+  // Wave 4 polish makes this configurable per-task (e.g. branch fork point).
+  const diffBaseAcc = createMemo<string | null>(() => (worktreePathAcc() ? "HEAD" : null))
+
+  // FileTree → Preview wiring: capture Preview's imperative API once,
+  // then route file-tree clicks/enters into Preview.open().
+  const [previewApi, setPreviewApi] = createSignal<PreviewApi | null>(null)
+  function handleOpenFile(relPath: string): void {
+    const api = previewApi()
+    if (api) api.open(relPath)
+  }
 
   // Auto-select the first task when one is created and nothing is
   // selected yet. Makes the new-task → start-chatting flow one
@@ -395,7 +389,9 @@ function Shell(props: AppDeps) {
     <box flexDirection="column" flexGrow={1} backgroundColor={theme.background}>
       <TopBar activeTitle={activeTask()?.title} />
       <box flexDirection="row" flexGrow={1}>
+        {/* Left: task sidebar (42 cells fixed) */}
         <Sidebar tasks={tasksAcc} onSelect={(id: string) => setSelectedId(id)} selectedId={selectedId} />
+        {/* Center: chat pane — primary interaction surface, takes most width */}
         <Chat
           orchestrator={props.orchestrator}
           taskId={taskIdAcc}
@@ -403,6 +399,18 @@ function Shell(props: AppDeps) {
           pendingPrompt={pendingPromptForActive}
           onPendingPromptConsumed={() => setPendingPrompt(null)}
         />
+        {/* Right: file tree top, diff/preview middle, terminal bottom */}
+        <box flexDirection="column" width={50} flexShrink={0} backgroundColor={theme.backgroundPanel}>
+          <box flexGrow={1} flexShrink={1} flexBasis={0}>
+            <FileTree worktreePath={worktreePathAcc} onOpenFile={handleOpenFile} />
+          </box>
+          <box flexGrow={2} flexShrink={1} flexBasis={0}>
+            <Preview worktreePath={worktreePathAcc} diffBase={diffBaseAcc} onOpen={(api) => setPreviewApi(api)} />
+          </box>
+          <box flexGrow={1} flexShrink={1} flexBasis={0}>
+            <Terminal cwd={worktreePathAcc} taskId={taskIdNullAcc} />
+          </box>
+        </box>
       </box>
       <StatusBar active={activeTask()?.title} />
     </box>
