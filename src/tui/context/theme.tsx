@@ -27,6 +27,7 @@ import { createEffect, createMemo } from "solid-js"
 import { createStore } from "solid-js/store"
 import { createSimpleContext } from "./helper"
 
+import conductor from "./theme/conductor.json" with { type: "json" }
 import dracula from "./theme/dracula.json" with { type: "json" }
 import nord from "./theme/nord.json" with { type: "json" }
 import opencode from "./theme/opencode.json" with { type: "json" }
@@ -78,6 +79,10 @@ export type Theme = {
 }
 
 const BUNDLED_THEMES: Record<string, ThemeJson> = {
+  // Conductor-inspired monochrome — primary text in white, accent in
+  // a desaturated steel-blue. Default for new kobe installs because
+  // it's the closest match to what the user is targeting visually.
+  conductor: conductor as ThemeJson,
   nord: nord as ThemeJson,
   opencode: opencode as ThemeJson,
   dracula: dracula as ThemeJson,
