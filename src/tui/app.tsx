@@ -23,7 +23,7 @@
 import { homedir } from "node:os"
 import { basename, join } from "node:path"
 import { TextAttributes } from "@opentui/core"
-import { render } from "@opentui/solid"
+import { render, useTerminalDimensions } from "@opentui/solid"
 import { type Accessor, For, Match, Show, Switch, createEffect, createMemo, createSignal } from "solid-js"
 import { ClaudeCodeLocal } from "../engine/claude-code-local/index.ts"
 import { Orchestrator } from "../orchestrator/core.ts"
@@ -491,28 +491,18 @@ function TopBar(props: {
   activeTask: Accessor<Task | undefined>
 }) {
   const { theme } = useTheme()
-  // Wave 4.5: surface the selected task's repo / branch / worktree
-  // metadata in the topbar (the sidebar dropped its repo grouping).
-  // We render the repo basename for compactness — the sidebar is 42
-  // cells, the topbar can be much wider, and the absolute path tends
-  // to be too noisy. The branch name is shown verbatim. The worktree
-  // path is shown without the home prefix when the worktree lives
-  // under `$HOME` so the row stays one line on a typical 80-cell
-  // terminal.
+  // Wave 4.5: surface the selected task's repo + branch in the topbar
+  // (the sidebar dropped its repo grouping). Format: `Repo <basename> > <branch>`.
+  // We use the repo basename — the absolute path is too noisy for a
+  // 80-cell terminal; the branch name is rendered verbatim. Worktree
+  // path was deliberately dropped per Jackson's preference — it was
+  // taking up too much space and the composer / filetree already make
+  // the worktree visible.
   const repoLabel = () => {
     const task = props.activeTask()
-    if (!task) return null
+    if (!task) return ""
     const parts = task.repo.split("/")
     return parts[parts.length - 1] || task.repo
-  }
-  const wtLabel = () => {
-    const task = props.activeTask()
-    if (!task || !task.worktreePath) return null
-    const home = process.env.HOME
-    if (home && task.worktreePath.startsWith(`${home}/`)) {
-      return `~/${task.worktreePath.slice(home.length + 1)}`
-    }
-    return task.worktreePath
   }
   return (
     <box flexDirection="row" justifyContent="space-between" paddingLeft={1} paddingRight={1} flexShrink={0}>
@@ -526,15 +516,10 @@ function TopBar(props: {
         </text>
         <Show when={props.activeTask() !== undefined}>
           <text fg={theme.textMuted}>·</text>
-          <text fg={theme.textMuted}>repo</text>
+          <text fg={theme.textMuted}>Repo</text>
           <text fg={theme.text}>{repoLabel()}</text>
-          <text fg={theme.textMuted}>·</text>
-          <text fg={theme.textMuted}>branch</text>
+          <text fg={theme.textMuted}>&gt;</text>
           <text fg={theme.text}>{props.activeTask()?.branch}</text>
-          <text fg={theme.textMuted}>·</text>
-          <text fg={theme.textMuted} wrapMode="none">
-            {wtLabel()}
-          </text>
         </Show>
       </box>
       <CreatePRButton orchestrator={props.orchestrator} activeTask={props.activeTask} />
@@ -593,6 +578,28 @@ function Shell(props: AppDeps) {
   // then route file-tree clicks/enters into Preview.open(). Plus the
   // outer center-column tab state below tracks which file tab is active.
   const [previewApi, setPreviewApi] = createSignal<PreviewApi | null>(null)
+
+  /* ------------------------------------------------------------------- */
+  /*  Splitter spike — sidebar ↔ workspace drag resize                    */
+  /* ------------------------------------------------------------------- */
+  // Minimal validation for draggable pane borders. Sidebar default 42
+  // (matches the long-standing "history rail" convention from
+  // opencode/agent-deck), with a hard floor at 20 cells (below that the
+  // status badges + first 8-10 chars of a task title stop being legible).
+  // Max is `terminalWidth - MIN_REMAINING` so the chat/right-column doesn't
+  // collapse. The right border of the sidebar wrapper IS the drag handle:
+  // we edge-detect on mouseDown (click hit the column == sidebarWidth - 1)
+  // and only treat subsequent drags as resize. Other clicks in the sidebar
+  // continue to focus the pane via onMouseUp as before.
+  const MIN_SIDEBAR_WIDTH = 20
+  const MIN_REMAINING_WIDTH = 40
+  const dims = useTerminalDimensions()
+  const [sidebarWidth, setSidebarWidth] = createSignal(42)
+  const [draggingSidebar, setDraggingSidebar] = createSignal(false)
+  const clampSidebar = (w: number) => {
+    const max = Math.max(MIN_SIDEBAR_WIDTH, dims().width - MIN_REMAINING_WIDTH)
+    return Math.min(max, Math.max(MIN_SIDEBAR_WIDTH, w))
+  }
 
   /* ------------------------------------------------------------------- */
   /*  Pane focus — backed by FocusContext (src/tui/context/focus.tsx)     */
@@ -886,12 +893,32 @@ function Shell(props: AppDeps) {
         <box
           flexShrink={0}
           flexDirection="column"
-          onMouseUp={() => setFocusedPane("sidebar")}
+          onMouseDown={(e: { x: number }) => {
+            // Edge-detect: the right border occupies the rightmost cell of
+            // the sidebar wrapper (column index = sidebarWidth() - 1 in
+            // global terminal coords, since the sidebar starts at x=0).
+            if (e.x === sidebarWidth() - 1) setDraggingSidebar(true)
+          }}
+          onMouseDrag={(e: { x: number }) => {
+            if (!draggingSidebar()) return
+            // event.x is the cursor's current column; new sidebar width is
+            // x+1 so the border lands on the cursor's column.
+            setSidebarWidth(clampSidebar(e.x + 1))
+          }}
+          onMouseDragEnd={() => setDraggingSidebar(false)}
+          onMouseUp={() => {
+            if (draggingSidebar()) {
+              setDraggingSidebar(false)
+              return
+            }
+            setFocusedPane("sidebar")
+          }}
           border={["right"]}
           customBorderChars={SplitBorder.customBorderChars}
-          borderColor={isFocused("sidebar")() ? theme.success : theme.border}
+          borderColor={draggingSidebar() ? theme.accent : isFocused("sidebar")() ? theme.success : theme.border}
         >
           <Sidebar
+            width={sidebarWidth}
             tasks={tasksAcc}
             onSelect={(id: string) => {
               setSelectedId(id)
