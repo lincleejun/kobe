@@ -69,15 +69,12 @@ export class FakeAIEngine implements AIEngine {
     return { sessionId, cwd }
   }
 
-  async resume(sessionId: string, _prompt: string): Promise<SessionHandle> {
+  async resume(sessionId: string, _prompt: string, _opts?: SpawnOpts): Promise<SessionHandle> {
     this.ensureQueue(sessionId)
     return { sessionId, cwd: process.cwd() }
   }
 
   stream(handle: SessionHandle): AsyncIterable<EngineEvent> {
-    if (handle.sessionId === null) {
-      throw new Error("FakeAIEngine.stream: handle has no sessionId")
-    }
     const sessionId = handle.sessionId
     const q = this.ensureQueue(sessionId)
     const stopped = this.stopped
@@ -105,13 +102,11 @@ export class FakeAIEngine implements AIEngine {
   }
 
   async stop(handle: SessionHandle): Promise<void> {
-    if (handle.sessionId !== null) {
-      this.stopped.add(handle.sessionId)
-      const q = this.queues.get(handle.sessionId)
-      if (q) {
-        q.closed = true
-        this.notify(q)
-      }
+    this.stopped.add(handle.sessionId)
+    const q = this.queues.get(handle.sessionId)
+    if (q) {
+      q.closed = true
+      this.notify(q)
     }
   }
 

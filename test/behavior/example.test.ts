@@ -26,16 +26,11 @@ afterEach(async () => {
 
 test("kobe boots and renders its title in the bordered box", async () => {
   kobe = await spawnKobe()
-  // The 0.1 scaffold renders a `<box title="kobe — booting" border>` —
-  // we only assert on the substrings that survive ANSI stripping.
-  // The em-dash `—` is part of the title; pinning to two short
-  // tokens (`kobe` and `booting`) keeps the assertion robust to
-  // future title tweaks while still proving the TUI repainted.
-  const screen = await kobe.waitFor((s) => s.includes("kobe") && s.includes("booting"), 10_000)
+  // Intentionally minimal — phase-specific banner text changes every
+  // wave. The harness's job is to prove the binary booted, painted,
+  // and is reachable. "kobe" appears in the title bar of every phase.
+  const screen = await kobe.waitFor((s) => s.includes("kobe"), 10_000)
   expect(screen).toContain("kobe")
-  expect(screen).toContain("booting")
-  // Phase-0.1 hint text in the body should also be visible.
-  expect(screen).toContain("Phase 0.1 scaffold")
   await kobe.exit()
   expect(kobe.closed).toBe(true)
 }, 20_000)

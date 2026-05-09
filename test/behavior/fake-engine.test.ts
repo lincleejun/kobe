@@ -17,14 +17,12 @@ describe("FakeAIEngine", () => {
   test("scripted events stream in order, terminating on `done`", async () => {
     const engine = new FakeAIEngine()
     const handle = await engine.spawn("/tmp/x", "hi")
-    const sid = handle.sessionId
-    expect(sid).not.toBeNull()
     const events: EngineEvent[] = [
       { type: "assistant.delta", text: "hello " },
       { type: "assistant.delta", text: "world" },
       { type: "done" },
     ]
-    engine.script(sid as string, events)
+    engine.script(handle.sessionId, events)
 
     const received: EngineEvent[] = []
     for await (const ev of engine.stream(handle)) received.push(ev)
@@ -34,7 +32,6 @@ describe("FakeAIEngine", () => {
   test("stream wakes up when events arrive after the consumer started", async () => {
     const engine = new FakeAIEngine()
     const handle = await engine.spawn("/tmp/x", "hi")
-    const sid = handle.sessionId as string
 
     const received: EngineEvent[] = []
     const consume = (async () => {
@@ -44,9 +41,9 @@ describe("FakeAIEngine", () => {
     // Push events on the next microtask so the consumer is already
     // parked on `q.waiters`.
     await new Promise((r) => setTimeout(r, 10))
-    engine.script(sid, [{ type: "assistant.delta", text: "late" }])
+    engine.script(handle.sessionId, [{ type: "assistant.delta", text: "late" }])
     await new Promise((r) => setTimeout(r, 10))
-    engine.script(sid, [{ type: "done" }])
+    engine.script(handle.sessionId, [{ type: "done" }])
 
     await consume
     expect(received.map((e) => e.type)).toEqual(["assistant.delta", "done"])
@@ -72,8 +69,8 @@ describe("FakeAIEngine", () => {
   test("readHistory returns pre-seeded messages", async () => {
     const engine = new FakeAIEngine()
     engine.setHistory("preset", [
-      { role: "user", content: "ping", ts: "2026-05-08T00:00:00Z" },
-      { role: "assistant", content: "pong", ts: "2026-05-08T00:00:01Z" },
+      { role: "user", content: "ping", timestamp: "2026-05-08T00:00:00Z", sessionId: "preset" },
+      { role: "assistant", content: "pong", timestamp: "2026-05-08T00:00:01Z", sessionId: "preset" },
     ])
     const msgs = await engine.readHistory("preset")
     expect(msgs).toHaveLength(2)
@@ -83,7 +80,7 @@ describe("FakeAIEngine", () => {
   test("unknown sessions yield nothing once finished", async () => {
     const engine = new FakeAIEngine()
     const handle = await engine.spawn("/tmp/x", "hi")
-    engine.finish(handle.sessionId as string)
+    engine.finish(handle.sessionId)
     const out: EngineEvent[] = []
     for await (const ev of engine.stream(handle)) out.push(ev)
     expect(out).toEqual([])
