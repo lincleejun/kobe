@@ -12,9 +12,41 @@ The architecture decisions are not obvious from the code (the code is mostly emp
 
 ## Conventions
 
-- `refs/` contains study material (symlinks + clones), gitignored. **Never edit anything inside `refs/`.**
+- `refs/` contains study material (symlinks + clones), **gitignored**. **Never edit anything inside `refs/`.**
 - The user's name is Jackson (sma1lboy). Respond in the language they use (Chinese or English).
 - Tech stack is locked: **TypeScript + `@opentui/core` + `@opentui/solid` + Solid.js + Bun**. Do not re-litigate.
+
+## Reference repos — clone before development
+
+kobe is built by deliberately copying ideas (and sometimes code) from four reference projects. New devs / agents must have all four cloned into `refs/` before touching the codebase. Run the setup block below; agents who skip this miss design context that's not derivable from the kobe source alone.
+
+| `refs/` slot | Source | Borrowed surface |
+|---|---|---|
+| `agent-deck` | [`/Users/jacksonc/i/agent-deck`](https://github.com/sma1lboy/agent-deck) (symlink) | **TUI visual style + layout grammar.** Pane chunking, agent-deck-style `[Tab] label` chip hotkeys, BOLD CAPS pane headers, status-line bottom bar, focused-pane border highlighting. When in doubt about how a pane should look, open `agent-deck` and look at how it solves the same problem. |
+| `conductor` (image only) | screenshots Jackson supplied | **Layout + product capability brief.** The 5-pane Conductor screenshot in `docs/DESIGN.md` §1 is the layout grammar. We don't have source access; we copy the chunking + capability set (multi-task, history sidebar, file tree, terminal, chat). Direction shifting per-session — see HANDOFF.md. |
+| `opcode` | fresh clone of [`winfunc/opcode`](https://github.com/winfunc/opcode) | **How to spawn + stream Claude Code as a subprocess.** kobe's `src/engine/claude-code-local/` was algorithmically ported from opcode's `src-tauri/src/commands/claude.rs` (subprocess spawn + stream-json parser + JSONL reader + binary discovery). When extending the engine, port from opcode first. |
+| `claude-code` | fresh clone of [`tanbiralam/claude-code`](https://github.com/tanbiralam/claude-code) (leaked Anthropic source, March 2026) | **Match Claude Code's exact stream rendering style.** Has `src/ink/` (the Ink-based TUI components, layout, events). When implementing how the stream output looks (assistant text formatting, tool call display, thinking dots, code blocks, citations), mirror Claude Code's choices so kobe feels like Claude Code, not a third-party shell. |
+
+### Setup before developing (clone all four)
+
+```bash
+mkdir -p refs && cd refs
+ln -s /Users/jacksonc/i/agent-deck agent-deck   # if you have it locally
+git clone --depth 1 https://github.com/winfunc/opcode.git
+git clone --depth 1 https://github.com/tanbiralam/claude-code.git
+# `conductor` is image-only — read docs/DESIGN.md §1 for the layout
+```
+
+`refs/` is gitignored, so each environment clones for itself. CI / agent runs that need ref reading should mirror this setup or surface a missing-ref error, not silently proceed with partial context.
+
+### When to consult which ref
+
+- "How should this pane look?" → `agent-deck`.
+- "What feature is missing from kobe vs Conductor?" → `docs/DESIGN.md` §1 + Jackson's screenshots.
+- "How do I spawn / parse / resume a Claude Code session?" → `opcode/src-tauri/src/commands/claude.rs`.
+- "How does Claude Code render <X>?" (where X = stream content, tool call display, prompt formatting, etc.) → `claude-code/src/ink/`.
+
+If a ref disagrees with kobe's existing implementation, kobe wins (we already chose) — but read the ref before deciding to deviate further.
 
 ## Operating model — agent teams + self-validation
 
