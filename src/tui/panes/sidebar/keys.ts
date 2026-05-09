@@ -51,6 +51,15 @@ export type SidebarBindingsOpts = {
   flatTaskIds: Accessor<readonly string[]>
   /** Selection callback. Fires on `enter` with the task id under the cursor. */
   onSelect: (id: string) => void
+  /**
+   * Delete callback. Fires on `d` with the task id under the cursor.
+   * The sidebar emits a *request* — the parent (app.tsx) owns the
+   * confirm dialog and the orchestrator call. Optional so consumers
+   * that don't wire delete (tests, host-mode) just get a no-op. The
+   * keymap layer is modifier-aware: the bare `{ key: "d" }` does NOT
+   * catch `ctrl+d`.
+   */
+  onDeleteRequest?: (taskId: string) => void
 }
 
 /**
@@ -90,6 +99,25 @@ export function useSidebarBindings(opts: SidebarBindingsOpts): void {
         cmd: (event) => {
           if (event.shift) ctrl.pressShiftG()
           else ctrl.pressG()
+        },
+      },
+      {
+        // `d` = delete the task under the cursor. The sidebar only
+        // emits the request; the parent owns the confirm dialog and
+        // the orchestrator call (so delete UX evolves without the
+        // sidebar growing dialog state). The cursor's task id is
+        // resolved from `flatTaskIds[cursorIndex]` — the same source
+        // of truth `enter` uses, so `d` always targets exactly the
+        // visibly-highlighted row. Modifier-aware: `ctrl+d` will not
+        // match this binding (per `lib/keymap.tsx`).
+        key: "d",
+        cmd: () => {
+          const ids = opts.flatTaskIds()
+          const idx = opts.cursorIndex()
+          if (idx < 0 || idx >= ids.length) return
+          const id = ids[idx]
+          if (id === undefined) return
+          opts.onDeleteRequest?.(id)
         },
       },
     ],

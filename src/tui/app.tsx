@@ -45,6 +45,7 @@ import { Preview, type PreviewApi } from "./panes/preview"
 import { Sidebar } from "./panes/sidebar/Sidebar"
 import { Terminal } from "./panes/terminal"
 import { type DialogContext, DialogProvider, useDialog } from "./ui/dialog"
+import { DialogConfirm } from "./ui/dialog-confirm"
 
 const DEFAULT_THEME = "tokyonight"
 
@@ -122,7 +123,10 @@ async function mountFakeEngineServer(fake: import("../../test/behavior/fake-engi
 /*  New-task dialog                                                       */
 /* --------------------------------------------------------------------- */
 
-type NewTaskInput = { repo: string; prompt: string }
+type NewTaskInput = { repo: string; prompt: string; baseRef: string }
+
+/** Default base ref when the user leaves the field blank. */
+const DEFAULT_BASE_REF = "main"
 
 /**
  * The new-task dialog. Per the Wave 3 G architectural pivot, we no
@@ -140,23 +144,35 @@ type NewTaskInput = { repo: string; prompt: string }
 function NewTaskDialog(props: { onSubmit: (v: NewTaskInput) => void; onCancel: () => void; defaultRepo: string }) {
   const dialog = useDialog()
   const { theme } = useTheme()
-  const [field, setField] = createSignal<"prompt" | "repo">("prompt")
+  const [field, setField] = createSignal<"prompt" | "repo" | "baseRef">("prompt")
   const [prompt, setPrompt] = createSignal("")
   const [repo, setRepo] = createSignal(props.defaultRepo)
+  const [baseRef, setBaseRef] = createSignal(DEFAULT_BASE_REF)
 
   function commit() {
     const p = prompt().trim()
     const r = repo().trim()
     if (!p || !r) return
-    props.onSubmit({ prompt: p, repo: r })
+    // Empty baseRef defaults to `main` — defensive fallback if the user
+    // backspaced then enter; orchestrator wants a non-empty ref to forward
+    // to git. Bogus refs surface as a git error from the orchestrator.
+    const b = baseRef().trim() || DEFAULT_BASE_REF
+    props.onSubmit({ prompt: p, repo: r, baseRef: b })
     dialog.clear()
   }
 
   useBindings(() => ({
     bindings: [
       {
+        // 3-way cycle: prompt → repo → baseRef → prompt. Mirrors the
+        // visual top-to-bottom field order so muscle memory works.
         key: "tab",
-        cmd: () => setField((f) => (f === "prompt" ? "repo" : "prompt")),
+        cmd: () =>
+          setField((f) => {
+            if (f === "prompt") return "repo"
+            if (f === "repo") return "baseRef"
+            return "prompt"
+          }),
       },
     ],
   }))
@@ -188,13 +204,30 @@ function NewTaskDialog(props: { onSubmit: (v: NewTaskInput) => void; onCancel: (
           }}
         />
       </box>
-      <box gap={0} paddingBottom={1}>
+      <box gap={0}>
         <text fg={field() === "repo" ? theme.accent : theme.textMuted}>repo path</text>
         <input
           value={repo()}
           placeholder={props.defaultRepo}
           focused={field() === "repo"}
           onInput={(v: string) => setRepo(v)}
+          onSubmit={() => {
+            if (!prompt().trim()) {
+              setField("prompt")
+              return
+            }
+            if (!repo().trim()) return
+            commit()
+          }}
+        />
+      </box>
+      <box gap={0} paddingBottom={1}>
+        <text fg={field() === "baseRef" ? theme.accent : theme.textMuted}>from branch</text>
+        <input
+          value={baseRef()}
+          placeholder={DEFAULT_BASE_REF}
+          focused={field() === "baseRef"}
+          onInput={(v: string) => setBaseRef(v)}
           onSubmit={() => commit()}
         />
       </box>
@@ -518,6 +551,7 @@ function Shell(props: AppDeps) {
       const created = await props.orchestrator.createTask({
         repo: result.repo,
         prompt: result.prompt,
+        baseRef: result.baseRef,
       })
       // Stage the prompt so the Chat pane can submit it as soon as it
       // subscribes to the new task. The pending-prompt signal must be
@@ -530,6 +564,35 @@ function Shell(props: AppDeps) {
       // and the chat pane may not be subscribed (no task selected).
       // eslint-disable-next-line no-console
       console.error("[kobe] createTask failed:", err)
+    }
+  }
+
+  /**
+   * Confirm + delete a task. Wired from the sidebar's `d` keypress
+   * (and a future right-click in Wave 4). Per CLAUDE.md the user's
+   * `d` press IS the explicit consent for clearing the worktree, but
+   * we still gate behind a confirm because the action is destructive
+   * and out-of-frame state (other terminal windows, in-progress writes)
+   * could mean "press the wrong key once" → "lose work."
+   */
+  async function confirmDeleteTask(taskId: string): Promise<void> {
+    const task = props.orchestrator.getTask(taskId)
+    if (!task) return
+    const ok = await DialogConfirm.show(
+      dialog,
+      `Delete '${task.title}'?`,
+      `Removes the worktree at ${task.worktreePath} and marks the task canceled. The branch and Claude Code session history are kept.`,
+      "cancel",
+    )
+    if (ok !== true) return
+    try {
+      await props.orchestrator.deleteTask(taskId)
+      // If the deleted task was the selected one, clear selection so the
+      // chat pane / file tree etc. stop pointing at a dead worktree.
+      if (selectedId() === taskId) setSelectedId(null)
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error("[kobe] deleteTask failed:", err)
     }
   }
 
@@ -587,6 +650,9 @@ function Shell(props: AppDeps) {
               // pull focus to workspace so the user can immediately type
               // / scroll without another ctrl+2.
               setFocusedPane("workspace")
+            }}
+            onDeleteRequest={(id: string) => {
+              void confirmDeleteTask(id)
             }}
             selectedId={selectedId}
             focused={isFocused("sidebar")}

@@ -393,6 +393,151 @@ describe("Orchestrator.archiveTask", () => {
 })
 
 // ----------------------------------------------------------------------
+// deleteTask — sidebar `d` flow
+// ----------------------------------------------------------------------
+
+describe("Orchestrator.deleteTask", () => {
+  test("archives a backlog task as canceled and removes the worktree from disk", async () => {
+    const { orch, store } = await buildOrchestrator()
+    const t = await orch.createTask({ repo, title: "delete-backlog", prompt: "" })
+    expect(fs.existsSync(t.worktreePath)).toBe(true)
+
+    await orch.deleteTask(t.id)
+
+    // Task record persists, but its status is `canceled` — per the
+    // hard rule in CLAUDE.md, we never silently delete entries; the
+    // user keeps the row around to inspect later.
+    const after = store.get(t.id)
+    expect(after?.status).toBe("canceled")
+    // Worktree files are gone — the user pressed `d` for "I'm done
+    // with this branch, clear it" and confirmed.
+    expect(fs.existsSync(t.worktreePath)).toBe(false)
+  })
+
+  test("pauses an in_progress task before removing its worktree", async () => {
+    const fake = new FakeAIEngine()
+    const stopSpy = vi.spyOn(fake, "stop")
+    const { orch, store } = await buildOrchestrator(fake)
+    const t = await orch.createTask({ repo, title: "delete-running", prompt: "" })
+    await orch.runTask(t.id, "go")
+    expect(store.get(t.id)?.status).toBe("in_progress")
+
+    await orch.deleteTask(t.id)
+    await orch._waitForPumpsIdle()
+
+    // Engine session must have been stopped (pauseTask calls
+    // engine.stop) before the worktree was nuked, otherwise the
+    // engine could still be holding open file handles inside it.
+    expect(stopSpy).toHaveBeenCalled()
+    expect(store.get(t.id)?.status).toBe("canceled")
+    expect(fs.existsSync(t.worktreePath)).toBe(false)
+  })
+
+  test("force-removes a dirty worktree (the user confirmed)", async () => {
+    const { orch, store } = await buildOrchestrator()
+    const t = await orch.createTask({ repo, title: "delete-dirty", prompt: "" })
+    // Make the worktree dirty so non-force `remove()` would refuse.
+    fs.writeFileSync(path.join(t.worktreePath, "wip.txt"), "wip\n")
+
+    await orch.deleteTask(t.id)
+
+    expect(fs.existsSync(t.worktreePath)).toBe(false)
+    expect(store.get(t.id)?.status).toBe("canceled")
+  })
+
+  test("is a no-op for unknown ids (defensive)", async () => {
+    const { orch, store } = await buildOrchestrator()
+    // No throw, no mutation — the UI may emit the request with a
+    // stale id after a fast cursor + key chord race.
+    await expect(orch.deleteTask("does-not-exist")).resolves.toBeUndefined()
+    expect(store.list()).toHaveLength(0)
+  })
+
+  test("surfaces engine stop failures as warnings without throwing past the caller", async () => {
+    // A degenerate engine whose stop() throws — simulates a
+    // half-stuck child process. deleteTask must still archive and
+    // not bubble up the engine-side failure to the UI.
+    const stub: AIEngine = {
+      async spawn(cwd) {
+        return { sessionId: "sess-1", cwd } satisfies SessionHandle
+      },
+      async resume() {
+        throw new Error("not used")
+      },
+      stream() {
+        return {
+          // eslint-disable-next-line @typescript-eslint/require-await
+          async *[Symbol.asyncIterator]() {
+            // Never yield until stop() is called externally.
+            await new Promise<void>(() => {})
+            yield { type: "done" } as EngineEvent
+          },
+        }
+      },
+      async readHistory() {
+        return []
+      },
+      async stop() {
+        throw new Error("simulated stuck engine")
+      },
+    }
+    const { orch, store } = await buildOrchestrator(stub)
+    const t = await orch.createTask({ repo, title: "delete-stuck", prompt: "" })
+    await orch.runTask(t.id, "go")
+
+    // Suppress the expected console.error from the safety net so the
+    // test output stays clean.
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+    await expect(orch.deleteTask(t.id)).resolves.toBeUndefined()
+    errSpy.mockRestore()
+
+    expect(store.get(t.id)?.status).toBe("canceled")
+    expect(fs.existsSync(t.worktreePath)).toBe(false)
+  })
+})
+
+// ----------------------------------------------------------------------
+// createTask — baseRef forwarding (new-task dialog "from branch" field)
+// ----------------------------------------------------------------------
+
+describe("Orchestrator.createTask baseRef plumbing", () => {
+  test("forwards baseRef to the worktree manager so the branch is rooted at it", async () => {
+    // Make a non-default branch in the fixture repo so we can root
+    // the new task at it. The base branch's HEAD commit must be
+    // distinct from `main`'s so we can assert ancestry.
+    spawnSync("git", ["checkout", "-b", "release-base"], { cwd: repo })
+    fs.writeFileSync(path.join(repo, "BASE.md"), "release base file\n")
+    spawnSync("git", ["add", "BASE.md"], { cwd: repo })
+    spawnSync("git", ["commit", "-m", "release base commit"], { cwd: repo })
+    // Capture the release-base SHA for ancestry assertion.
+    const releaseSha = spawnSync("git", ["rev-parse", "HEAD"], {
+      cwd: repo,
+      encoding: "utf8",
+    }).stdout.trim()
+    // Switch back to main so the worktree creation actually has to
+    // honor `baseRef` instead of just inheriting current HEAD.
+    spawnSync("git", ["checkout", "main"], { cwd: repo })
+
+    const { orch } = await buildOrchestrator()
+    const t = await orch.createTask({
+      repo,
+      title: "from-base",
+      prompt: "",
+      baseRef: "release-base",
+    })
+
+    // The new worktree's HEAD must descend from the release-base SHA
+    // (or be it). `git merge-base --is-ancestor` exits 0 when yes.
+    const ancestry = spawnSync("git", ["merge-base", "--is-ancestor", releaseSha, "HEAD"], {
+      cwd: t.worktreePath,
+    })
+    expect(ancestry.status).toBe(0)
+    // And the BASE.md file from the release branch must be present.
+    expect(fs.existsSync(path.join(t.worktreePath, "BASE.md"))).toBe(true)
+  })
+})
+
+// ----------------------------------------------------------------------
 // subscribeEvents — multi-subscriber + unsubscribe
 // ----------------------------------------------------------------------
 

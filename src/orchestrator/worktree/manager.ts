@@ -39,14 +39,21 @@ export class GitWorktreeManager implements WorktreeManager {
    * branch, returns its info without touching the filesystem. If a
    * worktree exists on the *wrong* branch, throws — we never hijack.
    *
+   * `baseRef` (optional): when the branch is being created fresh, this
+   * is the ref the new branch is rooted at — a branch name, tag, or
+   * commit SHA, anything `git worktree add -b <new> <path> <baseRef>`
+   * accepts. Defaults to the repo's current HEAD. When the requested
+   * branch already exists, `baseRef` is ignored: we never silently
+   * fast-forward an existing branch onto a new base.
+   *
    * Note: the public `WorktreeManager` interface is `(repo, branch,
-   * path)` (positional). The brief from the orchestrator described an
-   * options-object form. We satisfy the canonical interface and expose
-   * a small helper {@link createForTask} for the options-object call
-   * style; that helper composes {@link worktreePathFor} so callers
-   * don't have to.
+   * path, baseRef?)` (positional). The brief from the orchestrator
+   * described an options-object form. We satisfy the canonical
+   * interface and expose a small helper {@link createForTask} for the
+   * options-object call style; that helper composes
+   * {@link worktreePathFor} so callers don't have to.
    */
-  async create(repo: string, branch: string, worktreePath: string): Promise<WorktreeInfo> {
+  async create(repo: string, branch: string, worktreePath: string, baseRef?: string): Promise<WorktreeInfo> {
     requireAbsolute("repo", repo)
     requireAbsolute("path", worktreePath)
     if (!branch) throw new Error("create(): branch must be a non-empty string")
@@ -73,12 +80,21 @@ export class GitWorktreeManager implements WorktreeManager {
     fs.mkdirSync(path.dirname(worktreePath), { recursive: true })
 
     // Decide whether to create the branch. `git worktree add -b <new>`
-    // creates a fresh branch from HEAD; `git worktree add <path>
-    // <existing>` reuses one. We probe with `rev-parse` and pick.
+    // creates a fresh branch from HEAD (or `baseRef` when given);
+    // `git worktree add <path> <existing>` reuses one. We probe with
+    // `rev-parse` and pick.
+    //
+    // Note: `baseRef` only applies on the create-branch path. If the
+    // branch already exists, the user's choice of baseRef has no
+    // sensible meaning here (we'd either be lying or silently rebasing
+    // their branch); the orchestrator surfaces the resulting state via
+    // the existing branch, not via the now-ignored baseRef.
     const branchExists = this.branchExists(repo, branch)
     const args = branchExists
       ? ["worktree", "add", worktreePath, branch]
-      : ["worktree", "add", "-b", branch, worktreePath]
+      : baseRef
+        ? ["worktree", "add", "-b", branch, worktreePath, baseRef]
+        : ["worktree", "add", "-b", branch, worktreePath]
 
     git(args, { cwd: repo })
 
@@ -101,10 +117,20 @@ export class GitWorktreeManager implements WorktreeManager {
    * task. Computes the canonical path via {@link worktreePathFor} so
    * the caller doesn't have to (and so two callers can't disagree on
    * the layout).
+   *
+   * `baseRef` (optional): forwarded to {@link create} so the new branch
+   * can be rooted at an explicit ref instead of the repo's current HEAD.
+   * The new-task dialog passes this through when the user chose a
+   * non-default base branch.
    */
-  async createForTask(args: { repo: string; taskId: string; branch: string }): Promise<WorktreeInfo> {
+  async createForTask(args: {
+    repo: string
+    taskId: string
+    branch: string
+    baseRef?: string
+  }): Promise<WorktreeInfo> {
     const target = worktreePathFor(args.repo, args.taskId)
-    return this.create(args.repo, args.branch, target)
+    return this.create(args.repo, args.branch, target, args.baseRef)
   }
 
   /**

@@ -3,6 +3,7 @@ node_modules/
 dist/
 .kobe/
 .claude/
+tsconfig.vitest-temp.json
 .DS_Store
 *.log
 .env

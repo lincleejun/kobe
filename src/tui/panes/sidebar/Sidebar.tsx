@@ -72,6 +72,14 @@ export type SidebarProps = {
   selectedId: Accessor<string | null>
   onSelect: (id: string) => void
   focused?: Accessor<boolean>
+  /**
+   * Delete-request callback. Fires when the user presses `d` with the
+   * cursor on a task. The sidebar does NOT show a confirm — the parent
+   * (app.tsx Shell) owns the dialog flow and the orchestrator call so
+   * the sidebar stays a stateless view. Optional: tests and any future
+   * stripped-down embedder can leave delete unwired.
+   */
+  onDeleteRequest?: (taskId: string) => void
 }
 
 /** Hardcoded version label shown next to "kobe" in the header. Bump on release. */
@@ -165,6 +173,7 @@ export function Sidebar(props: SidebarProps) {
     setCursorIndex,
     flatTaskIds: flatIds,
     onSelect: (id) => props.onSelect(id),
+    onDeleteRequest: (id) => props.onDeleteRequest?.(id),
   })
 
   return (

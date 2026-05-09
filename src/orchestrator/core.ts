@@ -129,6 +129,17 @@ export interface CreateTaskInput {
    * never collide.
    */
   readonly branch?: string
+  /**
+   * Base ref for the new branch. When omitted the new branch is rooted
+   * at the repo's current HEAD (git's default). When set, it must be
+   * something `git worktree add -b <new> <path> <baseRef>` accepts: a
+   * branch name, tag, or commit SHA. The new-task dialog defaults this
+   * to `"main"` so tasks always branch off the integration base unless
+   * the user picks otherwise. If the ref doesn't resolve, the
+   * underlying `git worktree add` fails and the error is surfaced to
+   * the caller (the dialog displays it).
+   */
+  readonly baseRef?: string
 }
 
 /** Subscription teardown for {@link Orchestrator.subscribeEvents}. */
@@ -244,6 +255,7 @@ export class Orchestrator {
         repo: input.repo,
         taskId: placeholder.id,
         branch,
+        baseRef: input.baseRef,
       })
     } catch (err) {
       // Roll back the placeholder if worktree creation failed —
@@ -372,6 +384,69 @@ export class Orchestrator {
       this.handles.delete(task.id)
     }
     await this.store.archive(task.id, status)
+  }
+
+  /**
+   * Delete a task as the user understands the verb: stop the engine,
+   * remove the worktree files from disk, and mark the task `canceled`
+   * in the index.
+   *
+   * Why "delete" here is not "remove from the index": CLAUDE.md's hard
+   * rule forbids destructive actions without explicit consent in the
+   * same conversation turn. The user pressing `d` IS that consent for
+   * the worktree's contents — they're explicitly saying "I'm done with
+   * this branch, clear it" — but the *task record* itself stays in the
+   * index, just under the Canceled group, so it's inspectable later
+   * (the sessionId still resolves Claude Code's history). If the user
+   * later wants the row gone too, that's a separate "purge" affordance
+   * we haven't designed yet.
+   *
+   * Behavior:
+   *   1. Defensive no-op if the task can't be resolved (UI may have a
+   *      stale id after a fast-fingered cursor + key chord).
+   *   2. If the task is `in_progress`, pause it first to stop the
+   *      engine session cleanly. We surface engine stop failures as
+   *      console warnings rather than throw — the user has already
+   *      committed; bouncing on a half-stuck engine helps no one.
+   *   3. Force-remove the worktree (the user confirmed; if the
+   *      worktree is dirty they've accepted the loss). Worktree
+   *      removal failures are surfaced as console warnings AND the
+   *      archive still proceeds — we'd rather have a stale `.git/`
+   *      metadata entry than a task stuck in `in_progress` forever.
+   *   4. Archive as `canceled`. The store fires its listener bus and
+   *      the sidebar redraws the row under the Canceled group.
+   */
+  async deleteTask(id: TaskId | string): Promise<void> {
+    const task = this.store.get(id)
+    if (!task) return // defensive — fast cursor races or stale id
+
+    if (task.status === "in_progress") {
+      try {
+        await this.pauseTask(task.id)
+      } catch (err) {
+        // The engine may already be torn down (a `done` event arrived
+        // mid-flight). Log and proceed — the user's intent is to
+        // discard, not to babysit the engine state.
+        // eslint-disable-next-line no-console
+        console.error(`[kobe orchestrator] deleteTask: pauseTask failed for ${task.id}:`, err)
+        this.handles.delete(task.id)
+      }
+    }
+
+    if (task.worktreePath) {
+      try {
+        await this.worktrees.remove(task.worktreePath, { force: true })
+      } catch (err) {
+        // Disk-state cleanup failed (worktree directory missing, git
+        // metadata entry stale, EBUSY, etc.). We still flip the task
+        // to canceled so the UI reflects the user's intent. A future
+        // GC sweep can reconcile drift.
+        // eslint-disable-next-line no-console
+        console.error(`[kobe orchestrator] deleteTask: worktree remove failed for ${task.id}:`, err)
+      }
+    }
+
+    await this.store.archive(task.id, "canceled")
   }
 
   /**

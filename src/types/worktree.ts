@@ -49,8 +49,15 @@ export interface WorktreeManager {
    * working tree on `branch`, and is registered in the repo's
    * worktree list. On failure, no partial state is left behind
    * (best-effort cleanup before throwing).
+   *
+   * `baseRef` (optional): when creating a NEW branch, root it at this
+   * ref (a branch name, tag, or commit SHA — anything `git worktree
+   * add -b <new> <path> <baseRef>` accepts). When `baseRef` is
+   * undefined, behavior is unchanged: the new branch is rooted at the
+   * repo's current HEAD. When the requested branch already exists,
+   * `baseRef` is ignored — the impl never silently fast-forwards.
    */
-  create(repo: string, branch: string, path: string): Promise<WorktreeInfo>
+  create(repo: string, branch: string, path: string, baseRef?: string): Promise<WorktreeInfo>
 
   /**
    * Remove a worktree previously created with {@link create}.

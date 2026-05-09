@@ -199,4 +199,47 @@ describe("createForTask helper", () => {
     expect(info.path).toBe(worktreePathFor(repo, "01HABC"))
     expect(info.branch).toBe("kobe/01HABC")
   })
+
+  test("creates the new branch rooted at the explicit baseRef", async () => {
+    // Stage a non-main base branch with a distinct commit, then
+    // assert that creating a new worktree with `baseRef: "side-base"`
+    // descends from that commit (not from `main`).
+    //
+    // This is the load-bearing assertion for the new-task dialog's
+    // "from branch" feature: when the user picks a non-default base
+    // we must thread it all the way through to
+    // `git worktree add -b <new> <path> <baseRef>`. Without that,
+    // every task silently branches off whatever happens to be
+    // checked out in the source repo.
+    spawnSync("git", ["checkout", "-b", "side-base"], { cwd: repo })
+    fs.writeFileSync(path.join(repo, "SIDE.md"), "side\n")
+    spawnSync("git", ["add", "SIDE.md"], { cwd: repo })
+    spawnSync("git", ["commit", "-m", "side base"], { cwd: repo })
+    const sideSha = spawnSync("git", ["rev-parse", "HEAD"], {
+      cwd: repo,
+      encoding: "utf8",
+    }).stdout.trim()
+    // Move HEAD back to main so `baseRef: "side-base"` actually
+    // matters — without baseRef, the new worktree would inherit
+    // main's HEAD instead.
+    spawnSync("git", ["checkout", "main"], { cwd: repo })
+
+    const mgr = new GitWorktreeManager()
+    const info = await mgr.createForTask({
+      repo,
+      taskId: "from-side",
+      branch: "kobe/from-side",
+      baseRef: "side-base",
+    })
+
+    // Worktree's HEAD must be descended from side-base's SHA.
+    const ancestry = spawnSync("git", ["merge-base", "--is-ancestor", sideSha, "HEAD"], {
+      cwd: info.path,
+    })
+    expect(ancestry.status).toBe(0)
+    // And the side-base file must be checked out in the worktree.
+    expect(fs.existsSync(path.join(info.path, "SIDE.md"))).toBe(true)
+    // Branch name is the requested one (NOT side-base).
+    expect(info.branch).toBe("kobe/from-side")
+  })
 })
