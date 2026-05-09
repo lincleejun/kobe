@@ -1,31 +1,40 @@
 /**
  * kobe TUI bootstrap.
  *
- * Phase 0.2: mount the lifted opencode shell (theme + KV + sync + dialog +
- * command palette providers) and render a themed banner with a stub sidebar.
- * No real task data yet — the orchestrator and engine streams populate that
- * in Wave 1+.
+ * Mounts the lifted opencode shell (theme + KV + sync + dialog + command
+ * palette providers) and renders a themed banner with a stub sidebar. Real
+ * task data lands in Wave 2+; this entry's job is to prove the providers
+ * compose, the theme renders, and global keybindings are registered.
  *
- * The visible smoke surface here is intentional: the kobe banner uses the
- * theme's `primary` and `accent` colors so a `bun run dev` smoke run shows
- * ANSI color codes (proving the theme provider is wired) and the sidebar
- * width matches DESIGN.md §1's Conductor-style layout.
+ * Default theme is `tokyonight` — matches agent-deck's Tokyo Night palette
+ * (Stream D resolved decision in PLAN.md). Switch via `theme.set("nord")`
+ * once a runtime config is wired (Wave 4-ish).
  *
- * Press `cmd+k` (or `ctrl+k`) to open the empty command palette — the dialog
- * stack lift is verified by that key path opening a dialog you can dismiss
- * with `esc`.
+ * Global keybindings (registered by `useKobeKeybindings`):
+ *   - `cmd+k` / `ctrl+k` — open the command palette
+ *   - `?` — open the help dialog (full bindings table)
+ *   - `tab` / `shift+tab` — focus next/prev pane (no-op until Wave 3)
+ *   - `q` — confirm-quit
+ *   - `esc` — universal close-top-dialog
+ *
+ * Pane-local bindings (composer, sidebar nav, palette arrows) register
+ * themselves inside their components — this file only owns globals.
  */
 
 import { TextAttributes } from "@opentui/core"
 import { render } from "@opentui/solid"
 import { Show } from "solid-js"
+import { HelpDialog } from "./component/help-dialog"
 import { Sidebar } from "./component/sidebar"
-import { CommandPaletteProvider, useCommandPalette } from "./context/command-palette"
+import { CommandPaletteProvider } from "./context/command-palette"
+import { useKobeKeybindings } from "./context/keybindings"
 import { KVProvider } from "./context/kv"
 import { SyncProvider } from "./context/sync"
 import { ThemeProvider, useTheme } from "./context/theme"
-import { useBindings } from "./lib/keymap"
-import { DialogProvider } from "./ui/dialog"
+import { DialogProvider, useDialog } from "./ui/dialog"
+
+/** Default theme name. Picked at boot; runtime override lands in a later stream. */
+const DEFAULT_THEME = "tokyonight"
 
 const KOBE_BANNER = ["k o b e", "─────────"]
 
@@ -34,13 +43,13 @@ function HelpHint() {
   return (
     <box flexDirection="row" gap={2} paddingTop={1}>
       <text fg={theme.textMuted}>
+        <span style={{ fg: theme.accent }}>?</span> help
+      </text>
+      <text fg={theme.textMuted}>
         <span style={{ fg: theme.accent }}>cmd+k</span> commands
       </text>
       <text fg={theme.textMuted}>
-        <span style={{ fg: theme.accent }}>esc</span> dismiss
-      </text>
-      <text fg={theme.textMuted}>
-        <span style={{ fg: theme.accent }}>ctrl+c</span> quit
+        <span style={{ fg: theme.accent }}>q</span> quit
       </text>
     </box>
   )
@@ -55,10 +64,7 @@ function Banner() {
       </text>
       <text fg={theme.borderActive}>{KOBE_BANNER[1]}</text>
       <box paddingTop={1}>
-        <text fg={theme.text}>
-          TUI orchestrator for Claude Code <span style={{ fg: theme.textMuted }}>(codename)</span>
-        </text>
-        <text fg={theme.textMuted}>Phase 0.2 — opencode shell lifted, providers wired.</text>
+        <text fg={theme.text}>kobe — TUI orchestrator for Claude Code</text>
         <text fg={theme.textMuted}>
           theme: <span style={{ fg: theme.accent }}>{selected}</span>
         </text>
@@ -70,16 +76,13 @@ function Banner() {
 
 function Shell() {
   const { theme } = useTheme()
-  const palette = useCommandPalette()
+  const dialog = useDialog()
 
-  // Global hotkeys: cmd+k / ctrl+k open the palette; we register both
-  // because terminal modifier reporting differs across environments.
-  useBindings(() => ({
-    bindings: [
-      { key: "ctrl+k", cmd: () => palette.show() },
-      { key: "alt+k", cmd: () => palette.show() },
-    ],
-  }))
+  // Mount global keybindings near the root. Pane-local bindings register
+  // their own scoped useBindings calls deeper in the tree.
+  useKobeKeybindings({
+    onShowHelp: () => HelpDialog.show(dialog),
+  })
 
   return (
     <box flexDirection="row" flexGrow={1} backgroundColor={theme.background}>
@@ -99,7 +102,7 @@ function Shell() {
 
 function App() {
   return (
-    <ThemeProvider mode="dark" theme="opencode">
+    <ThemeProvider mode="dark" theme={DEFAULT_THEME}>
       <KVProvider>
         <SyncProvider>
           <DialogProvider>
