@@ -500,14 +500,12 @@ Constraint: each stream agent gets one focus area. **No cross-stream commits.** 
 
 ---
 
-## Open decisions blocking the plan
+## Open decisions — resolved 2026-05-08
 
-These need user input before Wave 1 can fully start. None block Phase 0.
-
-1. **Default theme for kobe**: proposal `nord`. (Stream D)
-2. **Worktree root**: `<repo>/.kobe/worktrees/<task-id>/` vs `~/.kobe/worktrees/<task-id>/`. Proposal: per-repo. (Stream B)
-3. **Branch naming**: auto `kobe/<slug>-<ulid-suffix>` vs prompt-each-time. Proposal: auto with override. (Stream E)
-4. **Concurrency cap**: max running tasks. Proposal: 4, configurable. (Stream E)
-5. **Terminal pane policy**: one-pty-per-task vs one-global-pty. Proposal: per-task while `in_progress`. (Stream J)
-
-A short Q&A round on these, then we can start spawning Phase 0 agents.
+| # | Decision | Stream | Resolution |
+|---|---|---|---|
+| 1 | Default theme | D | **`tokyonight`** (matches agent-deck's Tokyo Night palette; already lifted from opencode) |
+| 2 | Worktree root | B | **`.kobe/worktrees/<task-id>/`** (per-repo, gitignored, distinct namespace from Claude Code's `.claude/worktrees/`) |
+| 3 | Branch naming | E | **Auto** `kobe/<slug>-<ulid-suffix>`; user can override per-task |
+| 4 | Concurrency cap | E | **4** simultaneous running tasks; configurable via `~/.kobe/config.json` later |
+| 5 | Terminal pane | J | **One pty per task**, kept alive while task is `in_progress`, killed on archive |
