@@ -52,14 +52,13 @@ import { type ScrollBoxRenderable, TextAttributes } from "@opentui/core"
 import { type Accessor, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount } from "solid-js"
 import type { Orchestrator } from "../../../orchestrator/core.ts"
 import type { OrchestratorEvent } from "../../../types/engine.ts"
-import type { SlashEntry } from "../../context/command-palette"
 import { useTheme } from "../../context/theme"
 import { useDialog } from "../../ui/dialog"
 import { type BuiltinSlash, BUILTIN_CLAUDE_SLASHES } from "./composer/builtin-slashes"
 import { ModelPicker } from "./composer/ModelPicker"
 import { modelLabelFor } from "./composer/models"
 import { loadUserSlashes } from "./composer/user-slashes"
-import { Composer } from "./Composer"
+import { Composer, type ComposerSlashEntry } from "./Composer"
 import { MessageList } from "./MessageList"
 import {
   type ChatState,
@@ -133,18 +132,23 @@ export function Chat(props: ChatProps) {
     ),
   )
 
-  const slashes = createMemo<readonly SlashEntry[]>(() => {
+  const slashes = createMemo<readonly ComposerSlashEntry[]>(() => {
     // User overrides built-in on name collision (mirrors vibe-kanban's
-    // HashMap.extend ordering: later writes win).
-    const map = new Map<string, BuiltinSlash>()
-    for (const e of BUILTIN_CLAUDE_SLASHES) map.set(e.name, e)
-    for (const e of userSlashes()) map.set(e.name, e)
+    // HashMap.extend ordering: later writes win). We track origin
+    // alongside the entry so the dropdown can surface a "user" tag —
+    // a name collision where the user shadowed a built-in counts as
+    // a user entry (their definition is what runs).
+    type Tagged = { entry: BuiltinSlash; source: "builtin" | "user" }
+    const map = new Map<string, Tagged>()
+    for (const e of BUILTIN_CLAUDE_SLASHES) map.set(e.name, { entry: e, source: "builtin" })
+    for (const e of userSlashes()) map.set(e.name, { entry: e, source: "user" })
     return [...map.values()]
-      .sort((a, b) => a.name.localeCompare(b.name))
-      .map((entry) => ({
+      .sort((a, b) => a.entry.name.localeCompare(b.entry.name))
+      .map(({ entry, source }) => ({
         display: `/${entry.name}`,
         description: entry.description || undefined,
         aliases: entry.aliases?.map((a) => `/${a}`),
+        source,
         onSelect: () => {
           // Route through `send()` (declared below) so the user's slash
           // command appears in the chat history just like a typed

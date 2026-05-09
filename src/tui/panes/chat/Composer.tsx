@@ -57,6 +57,19 @@ import { useTheme } from "../../context/theme"
 import { getHistory, pushHistory } from "./composer/history"
 import { composerKeyBindings } from "./composer/keybindings"
 
+/**
+ * Slash entry with an optional `source` discriminator. Defined as an
+ * extension of {@link SlashEntry} (rather than mutating the base type
+ * in `command-palette.tsx`) so non-chat callers of the palette stay
+ * source-agnostic. Chat.tsx tags each merged entry; the dropdown row
+ * renders a muted `user` tag for entries that came from the user's
+ * own `.claude/{commands,skills}/` (project or global) and leaves
+ * the bundled claude-code surface unmarked.
+ */
+export type ComposerSlashEntry = SlashEntry & {
+  readonly source?: "builtin" | "user"
+}
+
 /** Maximum visible lines before the textarea scrolls internally. */
 const COMPOSER_MAX_LINES = 8
 
@@ -108,9 +121,13 @@ export interface ComposerProps {
    * Reactive slash-command list (typically `useCommandSlashes()`). When
    * supplied AND the buffer starts with `/`, the composer renders a
    * filtered dropdown above the textarea; up/down navigate, enter runs
-   * the highlighted entry, esc dismisses.
+   * the highlighted entry, esc dismisses. Entries may carry an optional
+   * `source: "user" | "builtin"` (see {@link ComposerSlashEntry}); when
+   * present, user-defined entries render with a muted source tag in
+   * the dropdown so the user can tell their own commands apart from the
+   * bundled claude-code set at a glance.
    */
-  slashes?: Accessor<readonly SlashEntry[]>
+  slashes?: Accessor<readonly ComposerSlashEntry[]>
   /**
    * Reactive accessor for the active task's tool-permission mode.
    * When undefined, treated as `"default"` for display. The composer
@@ -187,7 +204,7 @@ export function Composer(props: ComposerProps) {
     if (/\s/.test(buf)) return false
     return true
   })
-  const slashMatches = createMemo<readonly SlashEntry[]>(() => {
+  const slashMatches = createMemo<readonly ComposerSlashEntry[]>(() => {
     if (!slashOpen()) return []
     const list = props.slashes?.() ?? []
     const query = liveBuffer().toLowerCase()
@@ -211,7 +228,7 @@ export function Composer(props: ComposerProps) {
   // render outside the window when truncated.
   const SLASH_MAX_VISIBLE = 8
   type SlashWindow = {
-    readonly items: readonly SlashEntry[]
+    readonly items: readonly ComposerSlashEntry[]
     readonly start: number
     readonly total: number
   }
@@ -624,6 +641,20 @@ export function Composer(props: ComposerProps) {
                     {active() ? "▸ " : "  "}
                     {entry.display}
                   </text>
+                  {/* User-defined entries (project or global
+                      `.claude/{commands,skills}/`) render with a muted
+                      `user` tag so they're distinguishable from the
+                      bundled claude-code surface. Built-ins are the
+                      default — leaving them unmarked keeps the dropdown
+                      visually quiet for the common case. Tag uses the
+                      same `theme.textMuted` token as the description
+                      hint so it sits in the same visual register
+                      without competing with the active-row glyph. */}
+                  <Show when={entry.source === "user"}>
+                    <text fg={theme.textMuted} wrapMode="none">
+                      user
+                    </text>
+                  </Show>
                   <Show when={entry.description}>
                     <text fg={theme.textMuted} wrapMode="none">
                       {entry.description}
