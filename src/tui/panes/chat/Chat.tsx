@@ -325,64 +325,57 @@ export function Chat(props: ChatProps) {
     })
   }
 
-  // Task-switch reset: drop ALL prior subs + state, set local active
-  // tab from the orchestrator, seed + subscribe immediately.
-  createEffect(
-    on(
-      () => props.taskId(),
-      (taskId) => {
+  // Task + tab reconciler. ONE effect handles both:
+  //   - taskId change: tear down prior subs/state, reset local UI.
+  //   - tasksAcc change (post-createTask, post-createTab/closeTab):
+  //     reactively pick up the new task / new tabs.
+  //
+  // Earlier this was split across three effects, which raced when the
+  // newly-created task wasn't yet in `tasksAcc()` at the moment
+  // `setSelectedId` fired (the task-switch effect bailed via
+  // `getTask() === undefined` and the tabs-change effect refused to
+  // initialize because `currentSubsTaskId !== taskId`). The merged
+  // effect simply waits for the task to land in the signal — it
+  // re-runs on the next tasksAcc tick and seeds correctly.
+  createEffect(() => {
+    const taskId = props.taskId()
+    if (!taskId) {
+      if (currentSubsTaskId !== null) {
         teardownAllSubs()
         setStatesByTab(new Map())
         setDraft("")
         setExpandedToolIndex(null)
-        if (!taskId) {
-          setActiveTabIdLocal(null)
-          currentSubsTaskId = null
-          return
-        }
-        const task = props.orchestrator.getTask(taskId)
-        if (!task) {
-          setActiveTabIdLocal(null)
-          currentSubsTaskId = null
-          return
-        }
-        currentSubsTaskId = taskId
-        setActiveTabIdLocal(task.activeTabId)
-        syncTabSubs(taskId, task.tabs)
-        queueMicrotask(scrollToBottom)
-      },
-    ),
-  )
-
-  // Tabs-change reconciler: when the active task's tab list changes
-  // (createTab / closeTab in the orchestrator), add subs for new
-  // tabs and drop subs for closed ones.
-  createEffect(
-    on(
-      () => tabs(),
-      (currentTabs) => {
-        const taskId = props.taskId()
-        if (!taskId) return
-        // The task-switch effect above already runs the initial
-        // sync; skip to avoid double-subscribing on the same paint.
-        if (currentSubsTaskId !== taskId) return
-        syncTabSubs(taskId, currentTabs)
-      },
-    ),
-  )
-
-  // Mirror the orchestrator's persisted activeTabId only when local
-  // is null (initial seed) or the persisted one disappeared (external
-  // close). Don't clobber the user's local move.
-  createEffect(() => {
-    const id = props.taskId()
-    if (!id) return
-    const task = tasksAcc().find((t) => t.id === id)
-    if (!task) return
-    const local = activeTabId()
-    if (!local || !task.tabs.some((t) => t.id === local)) {
-      setActiveTabIdLocal(task.activeTabId)
+      }
+      setActiveTabIdLocal(null)
+      currentSubsTaskId = null
+      return
     }
+    // Reactive read — re-runs when the task lands or its tabs change.
+    const task = tasksAcc().find((t) => t.id === taskId)
+    if (!task) {
+      // Task not yet in signal (race with createTask). The effect
+      // re-runs when tasksAcc updates; until then, leave subs alone.
+      return
+    }
+    if (currentSubsTaskId !== taskId) {
+      // Switched tasks (or first time we see this task): reset.
+      teardownAllSubs()
+      setStatesByTab(new Map())
+      setDraft("")
+      setExpandedToolIndex(null)
+      currentSubsTaskId = taskId
+      setActiveTabIdLocal(task.activeTabId)
+      queueMicrotask(scrollToBottom)
+    } else {
+      // Same task, tabs may have changed — mirror persisted
+      // activeTabId only when local is null or pointing at a closed
+      // tab (don't clobber the user's local switch).
+      const local = activeTabId()
+      if (!local || !task.tabs.some((t) => t.id === local)) {
+        setActiveTabIdLocal(task.activeTabId)
+      }
+    }
+    syncTabSubs(taskId, task.tabs)
   })
 
   // Scroll anchor — used to force the message list back to the bottom

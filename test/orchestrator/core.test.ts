@@ -116,45 +116,59 @@ describe("deriveTitleFromPrompt", () => {
 // ----------------------------------------------------------------------
 
 describe("Orchestrator.createTask", () => {
-  test("persists a backlog task and creates the worktree on disk", async () => {
-    const { orch, store } = await buildOrchestrator()
+  test("persists a backlog task; runTask is what allocates the worktree (lazy)", async () => {
+    const fake = new FakeAIEngine()
+    const { orch, store } = await buildOrchestrator(fake)
     const task = await orch.createTask({ repo, title: "demo task", prompt: "" })
     expect(task.title).toBe("demo task")
     expect(task.status).toBe("backlog")
     expect(task.sessionId).toBeNull()
-    // worktree path matches the canonical layout
-    expect(task.worktreePath).toBe(worktreePathFor(repo, task.id))
-    // and exists on disk with the fixture's README copied in
-    expect(fs.existsSync(task.worktreePath)).toBe(true)
-    expect(fs.existsSync(path.join(task.worktreePath, "README.md"))).toBe(true)
-    // and is on a kobe/-prefixed branch
-    expect(task.branch.startsWith("kobe/")).toBe(true)
-    // store sees it too
+    // Lazy: createTask leaves worktreePath + branch empty.
+    expect(task.worktreePath).toBe("")
+    expect(task.branch).toBe("")
     expect(store.list()).toHaveLength(1)
+
+    // First runTask allocates the worktree on disk.
+    await orch.runTask(task.id, "first")
+    fake.finish("fake-1")
+    await orch._waitForPumpsIdle()
+    const updated = store.get(task.id)!
+    expect(updated.worktreePath).toBe(worktreePathFor(repo, task.id))
+    expect(fs.existsSync(updated.worktreePath)).toBe(true)
+    expect(fs.existsSync(path.join(updated.worktreePath, "README.md"))).toBe(true)
+    expect(updated.branch.startsWith("kobe/")).toBe(true)
   })
 
-  test("uses an explicit branch override when provided", async () => {
-    const { orch } = await buildOrchestrator()
+  test("uses an explicit branch override when provided (allocated lazily)", async () => {
+    const fake = new FakeAIEngine()
+    const { orch, store } = await buildOrchestrator(fake)
     const task = await orch.createTask({
       repo,
       title: "override",
       prompt: "",
       branch: "feature/explicit",
     })
-    expect(task.branch).toBe("feature/explicit")
+    expect(task.branch).toBe("") // lazy — populated by runTask
+    await orch.runTask(task.id, "first")
+    fake.finish("fake-1")
+    await orch._waitForPumpsIdle()
+    expect(store.get(task.id)?.branch).toBe("feature/explicit")
   })
 
-  test("rolls back the placeholder task when worktree creation fails", async () => {
+  test("runTask surfaces worktree creation failures without crashing", async () => {
     const { orch, store } = await buildOrchestrator()
     // Pass a non-repo path so git rejects the worktree creation.
     const bogusRepo = path.join(tmpRoot, "no-such-repo")
     fs.mkdirSync(bogusRepo, { recursive: true })
-    await expect(orch.createTask({ repo: bogusRepo, title: "bad", prompt: "" })).rejects.toThrow()
-    // The placeholder should be in `canceled` status (we don't hard-delete).
-    const all = store.list()
-    if (all.length > 0) {
-      expect(all[0]?.status).toBe("canceled")
-    }
+    const t = await orch.createTask({ repo: bogusRepo, title: "bad", prompt: "" })
+    // createTask itself succeeds (lazy); the failure surfaces from runTask.
+    expect(store.get(t.id)?.status).toBe("backlog")
+    await expect(orch.runTask(t.id, "go")).rejects.toThrow()
+    // Task stays in backlog with empty worktreePath; the user can rename
+    // / cancel / retry without an orphan on disk.
+    const after = store.get(t.id)!
+    expect(after.status).toBe("backlog")
+    expect(after.worktreePath).toBe("")
   })
 
   test("derives title from prompt when no explicit title is provided", async () => {
@@ -294,7 +308,8 @@ describe("Orchestrator.runTask", () => {
     const [sessionId, prompt, opts] = args as [string, string, SpawnOpts | undefined]
     expect(sessionId).toBe("fake-1")
     expect(prompt).toBe("second")
-    expect(opts?.env?.KOBE_RESUME_CWD).toBe(t.worktreePath)
+    // worktreePath was lazily allocated during the first runTask; refetch.
+    expect(opts?.env?.KOBE_RESUME_CWD).toBe(orch.getTask(t.id)?.worktreePath)
   })
 
   test("rejects with TaskNotFoundError for unknown id", async () => {
@@ -408,19 +423,18 @@ describe("Orchestrator.deleteTask", () => {
     const deleteHistorySpy = vi.spyOn(fake, "deleteHistory")
     const { orch, store } = await buildOrchestrator(fake)
     const t = await orch.createTask({ repo, title: "delete-backlog", prompt: "" })
-    expect(fs.existsSync(t.worktreePath)).toBe(true)
-    // Stamp a sessionId so deleteHistory has something to target. The
-    // backlog path normally wouldn't have one, but `d` on a previously-
-    // run task will, and the orchestrator must hit it.
+    // Trigger lazy worktree allocation so there's something to delete.
+    fake.script("fake-1", [{ type: "done" }])
+    await orch.runTask(t.id, "go")
+    await orch._waitForPumpsIdle()
+    const wt = orch.getTask(t.id)!.worktreePath
+    expect(fs.existsSync(wt)).toBe(true)
     await store.update(t.id, { sessionId: "sess-1" })
 
     await orch.deleteTask(t.id)
 
-    // Task record is gone — Wave 4 reversed the prior "keep canceled
-    // row" behavior. Worktree files are gone too. Chat history was
-    // requested for cleanup.
     expect(store.get(t.id)).toBeUndefined()
-    expect(fs.existsSync(t.worktreePath)).toBe(false)
+    expect(fs.existsSync(wt)).toBe(false)
     expect(deleteHistorySpy).toHaveBeenCalledWith("sess-1")
   })
 
@@ -431,27 +445,29 @@ describe("Orchestrator.deleteTask", () => {
     const t = await orch.createTask({ repo, title: "delete-running", prompt: "" })
     await orch.runTask(t.id, "go")
     expect(store.get(t.id)?.status).toBe("in_progress")
+    const wt = orch.getTask(t.id)!.worktreePath
 
     await orch.deleteTask(t.id)
     await orch._waitForPumpsIdle()
 
-    // Engine session must have been stopped (pauseTask calls
-    // engine.stop) before the worktree was nuked, otherwise the
-    // engine could still be holding open file handles inside it.
     expect(stopSpy).toHaveBeenCalled()
     expect(store.get(t.id)).toBeUndefined()
-    expect(fs.existsSync(t.worktreePath)).toBe(false)
+    expect(fs.existsSync(wt)).toBe(false)
   })
 
   test("force-removes a dirty worktree (the user confirmed)", async () => {
-    const { orch, store } = await buildOrchestrator()
+    const fake = new FakeAIEngine()
+    const { orch, store } = await buildOrchestrator(fake)
     const t = await orch.createTask({ repo, title: "delete-dirty", prompt: "" })
-    // Make the worktree dirty so non-force `remove()` would refuse.
-    fs.writeFileSync(path.join(t.worktreePath, "wip.txt"), "wip\n")
+    fake.script("fake-1", [{ type: "done" }])
+    await orch.runTask(t.id, "go")
+    await orch._waitForPumpsIdle()
+    const wt = orch.getTask(t.id)!.worktreePath
+    fs.writeFileSync(path.join(wt, "wip.txt"), "wip\n")
 
     await orch.deleteTask(t.id)
 
-    expect(fs.existsSync(t.worktreePath)).toBe(false)
+    expect(fs.existsSync(wt)).toBe(false)
     expect(store.get(t.id)).toBeUndefined()
   })
 
@@ -589,22 +605,28 @@ describe("Orchestrator.createTask baseRef plumbing", () => {
     // honor `baseRef` instead of just inheriting current HEAD.
     spawnSync("git", ["checkout", "main"], { cwd: repo })
 
-    const { orch } = await buildOrchestrator()
+    const fake = new FakeAIEngine()
+    const { orch } = await buildOrchestrator(fake)
     const t = await orch.createTask({
       repo,
       title: "from-base",
       prompt: "",
       baseRef: "release-base",
     })
+    // Lazy worktree: trigger allocation via runTask before asserting.
+    fake.script("fake-1", [{ type: "done" }])
+    await orch.runTask(t.id, "go")
+    await orch._waitForPumpsIdle()
+    const wt = orch.getTask(t.id)!.worktreePath
 
     // The new worktree's HEAD must descend from the release-base SHA
     // (or be it). `git merge-base --is-ancestor` exits 0 when yes.
     const ancestry = spawnSync("git", ["merge-base", "--is-ancestor", releaseSha, "HEAD"], {
-      cwd: t.worktreePath,
+      cwd: wt,
     })
     expect(ancestry.status).toBe(0)
     // And the BASE.md file from the release branch must be present.
-    expect(fs.existsSync(path.join(t.worktreePath, "BASE.md"))).toBe(true)
+    expect(fs.existsSync(path.join(wt, "BASE.md"))).toBe(true)
   })
 })
 
@@ -676,7 +698,8 @@ describe("Orchestrator engine call shape", () => {
     await orch._waitForPumpsIdle()
 
     expect(calls).toHaveLength(1)
-    expect(calls[0]?.cwd).toBe(t.worktreePath)
+    // worktreePath was lazily allocated during runTask; refetch.
+    expect(calls[0]?.cwd).toBe(orch.getTask(t.id)?.worktreePath)
     expect(calls[0]?.prompt).toBe("first")
   })
 })

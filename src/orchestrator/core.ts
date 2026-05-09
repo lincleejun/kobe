@@ -229,6 +229,14 @@ export class Orchestrator {
   private readonly pendingInput = new Map<TaskId, Map<string, UserInputPayload>>()
   /** Counter for generating unique requestIds across the orchestrator's lifetime. */
   private requestIdCounter = 0
+  /**
+   * Process-scoped record of branch/baseRef the user picked at
+   * `createTask` time but hasn't committed to disk yet (we allocate
+   * the worktree lazily on first `runTask`). Lost on kobe restart;
+   * `ensureWorktree` falls back to deterministic defaults if the
+   * map is missing the entry.
+   */
+  private readonly pendingWorktreeOpts = new Map<TaskId, { branch: string; baseRef?: string }>()
 
   private readonly tasksAcc: Accessor<Task[]>
   private readonly setTasks: (next: Task[]) => void
@@ -302,57 +310,69 @@ export class Orchestrator {
     const derivedTitle = explicitTitle || deriveTitleFromPrompt(input.prompt ?? "")
     const finalTitle = derivedTitle || PLACEHOLDER_TASK_TITLE
 
-    // Persist with a placeholder branch so we have an id to compute
-    // paths from. We then create the worktree, then patch the branch
-    // back onto the record. Two-phase to keep a single ulid id flowing
-    // through both the worktree path and the persisted record.
-    const placeholder = await this.store.create({
+    // Lazy worktree: createTask only persists the task record. The
+    // worktree (and its branch) are allocated by `runTask` on the
+    // first user submit. Rationale:
+    //   - createTask never fails on git state (dirty repo, branch
+    //     conflict, missing baseRef) — those errors surface inside
+    //     the chat where the user can read + react.
+    //   - The user can rename or cancel the task without leaving a
+    //     stranded worktree on disk.
+    //   - File-tree / terminal / PR panes already handle empty
+    //     `worktreePath` (treat as "no worktree yet").
+    //
+    // `pendingBranch` and `pendingBaseRef` are stored alongside the
+    // task so runTask knows what to allocate. We don't expose them on
+    // the public Task type; they live in a separate `pending` field
+    // on the persisted record. (Implementation note: we squirrel them
+    // into the in-memory `pendingWorktreeOpts` map keyed by task id.
+    // For now this is process-scoped — a kobe restart between
+    // createTask and runTask drops the user's branch/baseRef choice,
+    // which is acceptable because the new-task flow is always
+    // followed by an immediate first prompt.)
+    const branch = input.branch ?? autoBranch(finalTitle, "" /* id assigned below */)
+    const created = await this.store.create({
       title: finalTitle,
       repo: input.repo,
-      branch: "", // patched below
-      worktreePath: "", // patched below
+      branch: "", // populated by runTask when worktree is allocated
+      worktreePath: "", // populated by runTask when worktree is allocated
       sessionId: null,
       status: "backlog",
       archived: false,
     })
+    this.pendingWorktreeOpts.set(created.id, {
+      branch,
+      baseRef: input.baseRef,
+    })
+    return created
+  }
 
-    // The branch slug uses the placeholder title (sentinel or derived),
-    // not the eventual auto-renamed one — kobe-untitled-<ulid> works
-    // for both paths and `runTask`'s title backfill leaves the branch
-    // alone (renaming the on-disk worktree branch mid-session would
-    // detach claude's recorded cwd).
-    const branch = input.branch ?? autoBranch(finalTitle, placeholder.id)
-
-    let info: { path: string; branch: string }
-    try {
-      info = await this.worktrees.createForTask({
-        repo: input.repo,
-        taskId: placeholder.id,
-        branch,
-        baseRef: input.baseRef,
-      })
-    } catch (err) {
-      // Roll back the placeholder if worktree creation failed —
-      // otherwise the index has a phantom task with no on-disk state.
-      // We use archive("canceled") rather than a hard delete because
-      // `TaskIndexStore` has no public `delete` and CLAUDE.md forbids
-      // adding one without consent.
-      try {
-        await this.store.archive(placeholder.id, "canceled")
-      } catch {
-        /* swallow secondary failure */
-      }
-      // No explicit refresh: `store.archive` notifies its listeners,
-      // including our constructor-time subscription which mirrors the
-      // signal.
-      throw err
-    }
-
-    const finalized = await this.store.update(placeholder.id, {
+  /**
+   * Allocate the worktree for a task that was created with the lazy
+   * (Wave 4.X) flow. Idempotent: returns the task untouched if
+   * `worktreePath` is already populated. Called by `runTask` on the
+   * first submit; not part of the public API because it's a
+   * runTask-internal step.
+   */
+  private async ensureWorktree(task: Task): Promise<Task> {
+    if (task.worktreePath) return task
+    const opts = this.pendingWorktreeOpts.get(task.id)
+    // If the pending opts were lost (e.g. process restart between
+    // createTask and runTask), fall back to deterministic defaults so
+    // the task can still run.
+    const branch = opts?.branch ?? autoBranch(task.title, task.id)
+    const baseRef = opts?.baseRef
+    const info = await this.worktrees.createForTask({
+      repo: task.repo,
+      taskId: task.id,
+      branch,
+      baseRef,
+    })
+    this.pendingWorktreeOpts.delete(task.id)
+    return await this.store.update(task.id, {
       branch: info.branch,
       worktreePath: info.path,
     })
-    return finalized
   }
 
   /**
@@ -370,9 +390,16 @@ export class Orchestrator {
    *   - `canceled` → `in_progress` is rejected; canceled is terminal.
    */
   async runTask(id: TaskId | string, prompt?: string, tabId?: string): Promise<void> {
-    const task = this.requireTask(id)
+    let task = this.requireTask(id)
     if (task.status === "canceled") {
       throw new IllegalTransitionError(task.status, "in_progress", String(id))
+    }
+
+    // Lazy worktree: tasks created via the new-task dialog land here
+    // with `worktreePath: ""`. Allocate it now (idempotent — returns
+    // the task untouched if it already has a worktree).
+    if (!task.worktreePath) {
+      task = await this.ensureWorktree(task)
     }
 
     // Resolve the target tab. Default to the active one so existing
