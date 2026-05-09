@@ -112,7 +112,9 @@ export function Chat(props: ChatProps) {
   const taskStatus = createMemo(() => {
     const id = props.taskId()
     if (!id) return undefined
-    return props.orchestrator.tasksSignal()().find((t) => t.id === id)?.status
+    return props.orchestrator
+      .tasksSignal()()
+      .find((t) => t.id === id)?.status
   })
   const isCanceled = () => taskStatus() === "canceled"
 

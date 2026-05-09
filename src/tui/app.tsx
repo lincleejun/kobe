@@ -491,14 +491,51 @@ function TopBar(props: {
   activeTask: Accessor<Task | undefined>
 }) {
   const { theme } = useTheme()
+  // Wave 4.5: surface the selected task's repo / branch / worktree
+  // metadata in the topbar (the sidebar dropped its repo grouping).
+  // We render the repo basename for compactness — the sidebar is 42
+  // cells, the topbar can be much wider, and the absolute path tends
+  // to be too noisy. The branch name is shown verbatim. The worktree
+  // path is shown without the home prefix when the worktree lives
+  // under `$HOME` so the row stays one line on a typical 80-cell
+  // terminal.
+  const repoLabel = () => {
+    const task = props.activeTask()
+    if (!task) return null
+    const parts = task.repo.split("/")
+    return parts[parts.length - 1] || task.repo
+  }
+  const wtLabel = () => {
+    const task = props.activeTask()
+    if (!task || !task.worktreePath) return null
+    const home = process.env.HOME
+    if (home && task.worktreePath.startsWith(`${home}/`)) {
+      return `~/${task.worktreePath.slice(home.length + 1)}`
+    }
+    return task.worktreePath
+  }
   return (
     <box flexDirection="row" justifyContent="space-between" paddingLeft={1} paddingRight={1} flexShrink={0}>
-      <box flexDirection="row" flexShrink={1}>
+      <box flexDirection="row" flexShrink={1} gap={1}>
         <text fg={theme.primary} attributes={TextAttributes.BOLD}>
           kobe
         </text>
-        <text fg={theme.textMuted}> — </text>
-        <text fg={theme.text}>{props.activeTitle ?? "no task selected"}</text>
+        <text fg={theme.textMuted}>—</text>
+        <text fg={theme.text} attributes={TextAttributes.BOLD}>
+          {props.activeTitle ?? "no task selected"}
+        </text>
+        <Show when={props.activeTask() !== undefined}>
+          <text fg={theme.textMuted}>·</text>
+          <text fg={theme.textMuted}>repo</text>
+          <text fg={theme.text}>{repoLabel()}</text>
+          <text fg={theme.textMuted}>·</text>
+          <text fg={theme.textMuted}>branch</text>
+          <text fg={theme.text}>{props.activeTask()?.branch}</text>
+          <text fg={theme.textMuted}>·</text>
+          <text fg={theme.textMuted} wrapMode="none">
+            {wtLabel()}
+          </text>
+        </Show>
       </box>
       <CreatePRButton orchestrator={props.orchestrator} activeTask={props.activeTask} />
     </box>
@@ -866,6 +903,13 @@ function Shell(props: AppDeps) {
             onDeleteRequest={(id: string) => {
               void confirmDeleteTask(id)
             }}
+            onArchiveRequest={(id: string) => {
+              void props.orchestrator.setArchived(id).catch((err) => {
+                // eslint-disable-next-line no-console
+                console.error("[kobe] setArchived failed:", err)
+              })
+            }}
+            onAddTask={() => void openNewTaskFlow()}
             selectedId={selectedId}
             focused={isFocused("sidebar")}
           />

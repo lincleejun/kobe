@@ -258,6 +258,7 @@ export class Orchestrator {
       worktreePath: "", // patched below
       sessionId: null,
       status: "backlog",
+      archived: false,
     })
 
     const branch = input.branch ?? autoBranch(derivedTitle, placeholder.id)
@@ -447,6 +448,23 @@ export class Orchestrator {
       this.handles.delete(task.id)
     }
     await this.store.archive(task.id, status)
+  }
+
+  /**
+   * Toggle a task's `archived` flag. Wave 4.5 — sidebar splits into
+   * "Working session" (active) and "Archives" views; pressing `a` flips
+   * the cursor task between them. Non-destructive: the worktree, the
+   * session, and the manifest entry all stay; only the visibility
+   * filter changes.
+   *
+   * If `archived` is omitted, the flag is toggled. Pass it explicitly
+   * to force a state.
+   */
+  async setArchived(id: TaskId | string, archived?: boolean): Promise<void> {
+    const task = this.requireTask(id)
+    const next = archived ?? !task.archived
+    if (task.archived === next) return
+    await this.store.update(task.id, { archived: next })
   }
 
   /**

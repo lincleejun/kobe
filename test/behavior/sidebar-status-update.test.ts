@@ -194,22 +194,16 @@ test("sidebar keeps a task under its repo header across a backlog → done trans
   await kobe.typeText(repo)
   await kobe.sendKeys("\r")
 
-  // ---- assert the task lives under its repo header (initial state) ----
-  // Wait until the buffer shows the repo header `my-frontend` with
-  // count 1 followed by the task title. The W4.A sidebar layout puts
-  // the repo header above its task rows; PTY-flattened normalization
-  // collapses the line breaks but the repo label and task title remain
-  // close to each other in the byte stream.
-  await kobe.waitFor((s) => bufferContains(s, /my-frontend\s*1[\s\S]{0,200}status-transition/), 15_000)
+  // ---- assert the task is visible in the sidebar (initial state) ----
+  // Wave 4.5 dropped repo grouping. The sidebar shows a flat list under
+  // the active "Working session" tab. We anchor on the backlog-status
+  // badge `○` followed by the task title — that combination only
+  // appears once the row has rendered (the title alone might match the
+  // dialog field while the dialog is still open).
+  await kobe.waitFor((s) => bufferContains(s, /○\s*\S*status-transition/), 15_000)
   const initialScreen = await kobe.capture()
-  expect(bufferContains(initialScreen, /my-frontend\s*1[\s\S]{0,200}status-transition/)).toBe(true)
-  // The status badge in the initial state should be the muted ○
-  // glyph (backlog status). We don't assert positionally — partial
-  // repaints make adjacency unreliable — but we do assert the badge
-  // glyph is somewhere in the buffer. Once the engine flips status to
-  // `done`, the post-transition assertion below will look for the
-  // green `●` glyph instead.
-  expect(initialScreen).toContain("○")
+  expect(initialScreen).toContain("Working session")
+  expect(initialScreen).toContain("status-transition")
 
   // ---- pre-script the engine: drive the next runTask straight to `done` ----
   const doneEvents: EngineEvent[] = [{ type: "done" }]
@@ -225,28 +219,21 @@ test("sidebar keeps a task under its repo header across a backlog → done trans
   await kobe.typeText("go")
   await kobe.sendKeys("\r")
 
-  // ---- assert the row stays under its repo header after the transition ----
+  // ---- assert the badge flipped after the transition ----
   // The orchestrator's pump sees the scripted `done` event, calls
   // `store.update(id, { status: "done" })`, and the store fires its
   // change listener which feeds the orchestrator's task signal. The
-  // sidebar's `groupByRepo` re-buckets the row but it's still under
-  // the same repo header (status no longer drives grouping in W4.A).
-  // The badge mapping switches the glyph from `○` to `●` (success
-  // tone), and the row's repo header still shows count 1.
-  //
-  // We assert against the buffer because once the renderer has drawn
-  // the post-transition state, the substring `my-frontend 1 ● <title>`
-  // is permanently embedded somewhere in the cumulative bytes. The
-  // bug we are guarding against is the absence of that substring (i.e.
-  // the sidebar never repainted after the store mutation).
-  await kobe.waitFor((s) => bufferContains(s, /my-frontend\s*1[\s\S]{0,200}●\s*\S*status-transition/), 20_000)
+  // sidebar's badge mapping switches the row's glyph from `○` to `●`
+  // (success tone). The row stays in the active view (archived flag
+  // hasn't moved).
+  await kobe.waitFor((s) => bufferContains(s, /●\s*\S*status-transition/), 20_000)
   const doneScreen = await kobe.capture()
-  expect(bufferContains(doneScreen, /my-frontend\s*1[\s\S]{0,200}●\s*\S*status-transition/)).toBe(true)
-  // The repo count is still 1 — the row didn't disappear or duplicate.
-  // (The original status-grouped sidebar would have shown two
-  // headers — `Backlog 0` and `Done 1` — across the transition. The
-  // new repo-grouped sidebar shows one header that stays put.)
-  expect(bufferContains(doneScreen, /my-frontend\s*1/)).toBe(true)
+  expect(bufferContains(doneScreen, /●\s*\S*status-transition/)).toBe(true)
+  // The task row stays under "Working session" (status transitions
+  // don't archive). Archive flag is the only thing that moves a row
+  // between views.
+  expect(doneScreen).toContain("Working session")
+  expect(doneScreen).toContain("status-transition")
 
   await kobe.exit()
   expect(kobe.closed).toBe(true)

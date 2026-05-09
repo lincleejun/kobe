@@ -62,6 +62,16 @@ export interface Task {
   readonly worktreePath: string
   readonly sessionId: string | null
   readonly status: TaskStatus
+  /**
+   * Wave 4.5 archive flag — orthogonal to `status`. The sidebar splits
+   * tasks into "Working session" (active = `archived: false`) and
+   * "Archives" (`archived: true`) views, switchable with `[` / `]`.
+   * Archiving is non-destructive: the worktree stays, the chat history
+   * stays, the task can be unarchived (toggled with `a` again) at any
+   * time. Older tasks loaded from disk that lack this field are
+   * normalized to `false` at load time.
+   */
+  readonly archived: boolean
   readonly createdAt: string
   readonly updatedAt: string
 }

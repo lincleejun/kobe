@@ -49,9 +49,10 @@ describe("Task", () => {
       title: "t",
       repo: "/r",
       branch: "kobe/x",
-      worktreePath: "/r/.kobe/wt/x",
+      worktreePath: "/r/.claude/wt/x",
       sessionId: null,
       status: "backlog",
+      archived: false,
       createdAt: "2026-05-08T00:00:00Z",
       updatedAt: "2026-05-08T00:00:00Z",
     }

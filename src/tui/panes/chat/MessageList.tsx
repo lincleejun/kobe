@@ -317,11 +317,18 @@ export function MessageList(props: MessageListProps) {
           const i = item.index
           if (row.kind === "user") return <UserRow text={row.text} />
           if (row.kind === "assistant")
-            return <AssistantRow text={row.text} isLast={i === props.lastAssistantIdx} isStreaming={props.isStreaming} />
+            return (
+              <AssistantRow text={row.text} isLast={i === props.lastAssistantIdx} isStreaming={props.isStreaming} />
+            )
           if (row.kind === "system") return <SystemRow text={row.text} />
           // tool row
           return (
-            <ToolRow row={row} index={i} expanded={props.expandedToolIndex === i} onToggle={() => props.onToggleTool(i)} />
+            <ToolRow
+              row={row}
+              index={i}
+              expanded={props.expandedToolIndex === i}
+              onToggle={() => props.onToggleTool(i)}
+            />
           )
         }}
       </For>

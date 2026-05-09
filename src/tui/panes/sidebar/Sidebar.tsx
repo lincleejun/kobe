@@ -1,58 +1,47 @@
 /**
- * kobe sidebar pane (Stream F + Wave 4 W4.A).
+ * kobe sidebar pane (Stream F → Wave 4.A → Wave 4.5).
  *
- * Renders the **repo-grouped** task list inside a 42-cell-wide column.
- * Wave 4 dropped the 5-status grouping per HANDOFF.md §"Direction shift"
- * #1 + #2 — kobe doesn't manage PR-merge state and the In progress / In
- * review / Backlog / Done / Canceled / Error shape didn't fit. Layout:
+ * Wave 4.5 reverses Wave 4.A's repo grouping. Jackson's call: a flat
+ * task list is fine, and selected-task metadata (repo / branch /
+ * worktree path) is surfaced in the topbar instead. The sidebar now
+ * splits tasks into two views, switchable with `[` and `]`:
  *
- *   kobe
+ *   ┌───────────────────────────────────────┐
+ *   │ kobe                                   │
+ *   │                                        │
+ *   │ [ Working session ]   Archives         │
+ *   │                                        │
+ *   │   ● fix login redirect bug             │
+ *   │   ○ refactor auth service              │
+ *   │   ○ add password reset                 │
+ *   │                                        │
+ *   │ + New task                              │
+ *   └───────────────────────────────────────┘
  *
- *   my-frontend  3
- *     ● fix login redirect bug
- *     ○ refactor auth service
- *     ○ add password reset
- *
- *   api-server   1
- *     ● migrate to fastify
- *
- *   + Add repo
+ * The active view shows tasks where `task.archived === false`; the
+ * archived view shows the rest. `a` on a row toggles its archived flag
+ * (non-destructive; the worktree, the branch, and the chat history all
+ * stay).
  *
  * The 42-cell sidebar width is a documented hardcode (CLAUDE.md
  * "flex-first, hardcode last"): convention rationale — matches
- * opencode/agent-deck precedent for "history rail" panes. We import the
- * `SIDEBAR_WIDTH` constant from the lifted opencode primitive
- * (`src/tui/component/sidebar.tsx`) so the convention has one source
- * of truth across the codebase.
+ * opencode/agent-deck precedent for "history rail" panes.
  *
  * Status badges (●○) still render on per-task rows as a visual hint of
- * the underlying `task.status` value (which stays on disk untouched —
- * the orchestrator's concurrency cap depends on it; a future
- * experimental flag will resurrect a status-grouped view), but the
- * sidebar no longer groups, sorts, or re-orders by status.
+ * the underlying `task.status` (the orchestrator's concurrency cap and
+ * lifecycle still depend on it), but the sidebar no longer groups
+ * by status, by repo, or by anything else — only the active-view
+ * filter applies.
  *
  * Cursor / nav: a Solid signal `cursorIndex` indexes the *flat*
- * navigable task list (repo headers are NOT navigable; j/k step over
- * them transparently). `enter` selects the cursor row, `d` requests
- * delete via the parent-owned confirm dialog, `g g` (chord) jumps to
- * top, `G` jumps to bottom — see `keys.ts` + `controller.ts`. Single-
- * repo collapse: not implemented; the repo header always renders even
- * when there's only one repo. This keeps layout stable as the user
- * adds repos and makes the multi-repo nature of kobe visible from
- * keystroke one. (Future polish could collapse the header in single-
- * repo mode if Jackson asks.)
- *
- * `+ Add repo` affordance: rendered as the footer row. Pressing `n` or
- * `ctrl+n` (the existing global bindings) opens the new-task dialog,
- * which doubles as the new-repo path: typing a fresh repo path in the
- * dialog's repo field creates a session under that repo. Wiring the
- * mouse click on the footer to the same handler is left as a Wave 4
- * follow-up — clicking the row is currently a no-op visual element.
+ * navigable task list within the active view. View switches reset the
+ * cursor to 0. `enter` selects, `d` deletes, `a` toggles archive,
+ * `[`/`]` switches view, `g g` jumps to top, `G` jumps to bottom.
  *
  * Reactivity: every prop is an `Accessor`. We never `.map()` arrays in
- * JSX — `For` is used so Solid keeps the row list reactive. The
- * grouping recomputes via `createMemo` only when the upstream `tasks`
- * accessor changes; cursor changes don't re-group.
+ * JSX — `For` is used so Solid keeps the row list reactive. The view
+ * filter and row build recompute via `createMemo` only when their
+ * inputs change.
  *
  * Focus: `props.focused` defaults to `() => true` so embedders that
  * don't yet thread the focus signal still get a working sidebar.
@@ -60,39 +49,30 @@
 
 import type { Task, TaskStatus } from "@/types"
 import { TextAttributes } from "@opentui/core"
-import { type Accessor, For, Show, createEffect, createMemo, createSignal } from "solid-js"
+import { type Accessor, For, Show, createEffect, createMemo, createSignal, on } from "solid-js"
 import { SIDEBAR_WIDTH } from "../../component/sidebar"
 import { useTheme } from "../../context/theme"
-import { buildRows, flattenIds } from "./groups"
+import { type SidebarView, buildRows, flattenIds } from "./groups"
 import { useSidebarBindings } from "./keys"
 
-/**
- * Props for the sidebar pane. Lives in this file (not the barrel) to
- * keep `index.ts` a pure re-export with no inline type definitions —
- * the barrel imports from here, not the other way around, so no circular
- * dependency exists at module-init time.
- */
 export type SidebarProps = {
   tasks: Accessor<readonly Task[]>
   selectedId: Accessor<string | null>
   onSelect: (id: string) => void
   focused?: Accessor<boolean>
-  /**
-   * Delete-request callback. Fires when the user presses `d` with the
-   * cursor on a task. The sidebar does NOT show a confirm — the parent
-   * (app.tsx Shell) owns the dialog flow and the orchestrator call so
-   * the sidebar stays a stateless view. Optional: tests and any future
-   * stripped-down embedder can leave delete unwired.
-   */
   onDeleteRequest?: (taskId: string) => void
   /**
-   * Optional callback for the `+ Add repo` footer affordance. When
-   * provided, clicking the footer row invokes this — typically the
-   * parent's existing new-task flow handler. Left undefined this
-   * stream; the global `n` / `ctrl+n` bindings remain the canonical
-   * entry point.
+   * Archive-toggle callback. Wave 4.5: pressing `a` flips the cursor
+   * task's `archived` flag, which moves it between the Working session
+   * and Archives views.
    */
-  onAddRepo?: () => void
+  onArchiveRequest?: (taskId: string) => void
+  /**
+   * Optional callback for the `+ New task` footer affordance. Left
+   * undefined this stream; the global `n`/`ctrl+n` bindings remain the
+   * canonical entry point.
+   */
+  onAddTask?: () => void
 }
 
 /**
@@ -100,14 +80,7 @@ export type SidebarProps = {
  * with the theme colour resolved at render time; storing the *tone* (not
  * the resolved RGBA) keeps badges reactive to theme switches.
  *
- * The badge is now a per-task hint only — no grouping reads from this
- * map. Token choice rationale:
- *   - `done` → success (green check)
- *   - `in_review` → warning (amber, awaits user)
- *   - `in_progress` → primary (themeful "active" colour)
- *   - `backlog` → textMuted (deferred)
- *   - `canceled` → textMuted (no longer relevant)
- *   - `error` → error (red)
+ * Per-task hint only — no grouping reads from this map.
  */
 const STATUS_BADGE: Record<
   TaskStatus,
@@ -121,30 +94,29 @@ const STATUS_BADGE: Record<
   error: { glyph: "✕", tone: "error" },
 }
 
-// Row layout helpers (`buildRows`, `flattenIds`) live in `groups.ts` so
-// they are testable without spinning up the renderer. They're imported
-// at the top of this file.
+/**
+ * Tab labels for the view switcher. Order matches the `SidebarView`
+ * union; the `[` / `]` keys cycle within this list (currently 2 entries).
+ */
+const VIEW_TABS: ReadonlyArray<{ view: SidebarView; label: string }> = [
+  { view: "active", label: "Working session" },
+  { view: "archived", label: "Archives" },
+]
 
 export function Sidebar(props: SidebarProps) {
   const { theme } = useTheme()
 
-  // Default `focused` accessor — see file header. Reading through this
-  // shim makes "no focused prop passed" mean "always focused" without
-  // re-creating a signal on every render.
   const focusedAccessor = () => (props.focused ? props.focused() : true)
 
-  // Memoize the flat row list and the navigable id list. Solid will
-  // re-run these only when `props.tasks()` changes — cursor moves don't
-  // re-group, header expansion doesn't re-group.
-  const rows = createMemo(() => buildRows(props.tasks()))
+  // Active view; default to the working session. `[` / `]` cycle
+  // through `VIEW_TABS`.
+  const [view, setView] = createSignal<SidebarView>("active")
+
+  // Filtered, flat row list for the active view. Recomputes only when
+  // the upstream tasks accessor or the view changes.
+  const rows = createMemo(() => buildRows(props.tasks(), view()))
   const flatIds = createMemo(() => flattenIds(rows()))
 
-  // Cursor index into `flatIds`. -1 when the list is empty. Synced from
-  // `props.selectedId` on first render and whenever the parent changes
-  // it from outside; keystroke movement updates the cursor locally and
-  // we emit `onSelect` when the user presses enter (we do NOT emit
-  // `onSelect` on every j/k press — that would be a different semantic;
-  // the brief separates "cursor position" from "selection").
   const [cursorIndex, setCursorIndex] = createSignal<number>(-1)
 
   // Sync cursor from external selectedId. Runs whenever props.selectedId
@@ -153,9 +125,6 @@ export function Sidebar(props: SidebarProps) {
     const id = props.selectedId()
     const ids = flatIds()
     if (id === null) {
-      // Move cursor onto the first navigable row when tasks first
-      // arrive; otherwise leave it where it is so j/k position is
-      // preserved across upstream prop churn that doesn't change ids.
       if (cursorIndex() === -1 && ids.length > 0) setCursorIndex(0)
       if (cursorIndex() >= ids.length) setCursorIndex(Math.max(0, ids.length - 1))
       if (ids.length === 0) setCursorIndex(-1)
@@ -165,9 +134,30 @@ export function Sidebar(props: SidebarProps) {
     if (idx >= 0 && idx !== cursorIndex()) setCursorIndex(idx)
   })
 
-  // Register pane-local bindings. The hook closes over our cursor
-  // signal — `useBindings` re-evaluates the config on every keypress, so
-  // toggling `focused` from outside immediately disables our keys.
+  // Reset cursor to 0 on view switch — the previous index is meaningless
+  // against the new filtered list. `on` so we react only to view
+  // changes, not to upstream task churn.
+  createEffect(
+    on(view, () => {
+      const ids = flatIds()
+      setCursorIndex(ids.length > 0 ? 0 : -1)
+    }),
+  )
+
+  /**
+   * Cycle the view by `delta` (-1 = previous, +1 = next). Wraps. Today
+   * there are 2 views so both directions toggle, but the cycle shape is
+   * preserved so a future third view drops in without a binding rewrite.
+   */
+  function cycleView(delta: -1 | 1): void {
+    const cur = view()
+    const idx = VIEW_TABS.findIndex((t) => t.view === cur)
+    if (idx < 0) return
+    const next = (idx + delta + VIEW_TABS.length) % VIEW_TABS.length
+    const target = VIEW_TABS[next]
+    if (target) setView(target.view)
+  }
+
   useSidebarBindings({
     focused: focusedAccessor,
     cursorIndex,
@@ -175,6 +165,8 @@ export function Sidebar(props: SidebarProps) {
     flatTaskIds: flatIds,
     onSelect: (id) => props.onSelect(id),
     onDeleteRequest: (id) => props.onDeleteRequest?.(id),
+    onArchiveRequest: (id) => props.onArchiveRequest?.(id),
+    onViewSwitch: (delta) => cycleView(delta),
   })
 
   return (
@@ -187,23 +179,39 @@ export function Sidebar(props: SidebarProps) {
       paddingLeft={2}
       paddingRight={2}
     >
-      {/* Header: just "kobe". The previous version label was visual
-         clutter — it changes per-build, doesn't help the user navigate,
-         and there's a CLAUDE.md file at the repo root for builds. */}
+      {/* Header: just "kobe". */}
       <box flexDirection="row" paddingBottom={1}>
         <text fg={theme.primary} attributes={TextAttributes.BOLD} wrapMode="none">
           kobe
         </text>
       </box>
 
-      {/* Body: scrollable repo-grouped task list. Stretching with
-         flexGrow so the footer always sits at the bottom. */}
+      {/* View switcher: tab strip with the active view bracketed +
+         emphasized. `[` / `]` toggles. */}
+      <box flexDirection="row" gap={2} paddingBottom={1}>
+        <For each={VIEW_TABS}>
+          {(tab) => {
+            const active = () => view() === tab.view
+            return (
+              <text
+                fg={active() ? theme.primary : theme.textMuted}
+                attributes={active() ? TextAttributes.BOLD : undefined}
+                wrapMode="none"
+                onMouseUp={() => setView(tab.view)}
+              >
+                {active() ? `[ ${tab.label} ]` : tab.label}
+              </text>
+            )
+          }}
+        </For>
+      </box>
+
+      {/* Body: scrollable flat task list. Stretches with flexGrow so
+         the footer always sits at the bottom. */}
       <scrollbox
         flexGrow={1}
         verticalScrollbarOptions={{
           trackOptions: {
-            // Transparent track + thumb → invisible scrollbar; still
-            // scrollable but doesn't clutter the see-through aesthetic.
             foregroundColor: "transparent",
           },
         }}
@@ -211,26 +219,6 @@ export function Sidebar(props: SidebarProps) {
         <box flexShrink={0} gap={0} paddingRight={1}>
           <For each={rows()}>
             {(row) => {
-              if (row.kind === "repo-header") {
-                const label = row.label
-                const count = row.count
-                return (
-                  <box
-                    flexDirection="row"
-                    justifyContent="space-between"
-                    paddingTop={1}
-                    paddingLeft={1}
-                    paddingRight={1}
-                  >
-                    <text fg={theme.textMuted} attributes={TextAttributes.BOLD} wrapMode="none">
-                      {label}
-                    </text>
-                    <text fg={theme.textMuted} wrapMode="none">
-                      {String(count)}
-                    </text>
-                  </box>
-                )
-              }
               const task = row.task
               const flatIndex = row.flatIndex
               const isCursor = () => flatIndex === cursorIndex()
@@ -275,19 +263,16 @@ export function Sidebar(props: SidebarProps) {
           </For>
           <Show when={flatIds().length === 0}>
             <box paddingTop={1} paddingLeft={1}>
-              <text fg={theme.textMuted}>No tasks yet.</text>
+              <text fg={theme.textMuted}>{view() === "active" ? "No active tasks." : "No archived tasks."}</text>
             </box>
           </Show>
         </box>
       </scrollbox>
 
-      {/* Footer: "+ Add repo" affordance. Triggers `onAddRepo` if the
-         parent wires it; otherwise it's a visual placeholder and the
-         user opens the new-task dialog via the global `n`/`ctrl+n`
-         bindings. */}
+      {/* Footer: "+ New task" affordance. */}
       <box flexShrink={0} paddingTop={1}>
-        <text fg={theme.textMuted} wrapMode="none" onMouseUp={() => props.onAddRepo?.()}>
-          + Add repo
+        <text fg={theme.textMuted} wrapMode="none" onMouseUp={() => props.onAddTask?.()}>
+          + New task
         </text>
       </box>
     </box>

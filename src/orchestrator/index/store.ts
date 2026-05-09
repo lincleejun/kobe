@@ -54,7 +54,14 @@ export interface TaskIndexStoreOptions {
 }
 
 /** The shape we accept on `create()` — id and timestamps are auto-assigned. */
-export type TaskCreateInput = Omit<Task, "id" | "createdAt" | "updatedAt">
+/**
+ * Input shape for {@link TaskIndexStore.create}. `archived` is optional —
+ * new tasks always start in the working session ("active") view, so
+ * callers don't need to specify it. The store fills in `false` on create.
+ */
+export type TaskCreateInput = Omit<Task, "id" | "createdAt" | "updatedAt" | "archived"> & {
+  readonly archived?: boolean
+}
 
 /** Empty manifest used as the recovery / first-run default. */
 const EMPTY_INDEX: TaskIndex = { version: 1, tasks: [] } as const
@@ -220,6 +227,7 @@ export class TaskIndexStore {
     this.assertLoaded()
     const now = new Date().toISOString()
     const task: Task = {
+      archived: false,
       ...partial,
       id: toTaskId(ulid()),
       createdAt: now,
@@ -406,6 +414,10 @@ function coerceTask(value: unknown): Task | null {
     worktreePath: v.worktreePath,
     sessionId: v.sessionId as string | null,
     status: v.status,
+    // Wave 4.5: `archived` is a new field. Records written before its
+    // introduction don't have it; default to false (i.e. "active /
+    // working session"). The user can archive them with `a`.
+    archived: typeof v.archived === "boolean" ? v.archived : false,
     createdAt: v.createdAt,
     updatedAt: v.updatedAt,
   }

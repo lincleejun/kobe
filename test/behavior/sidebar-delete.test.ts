@@ -198,16 +198,15 @@ test("pressing `d` on the sidebar cursor + confirm deletes the task and removes 
   // Sidebar shows the task. Wait until the title is visible.
   await kobe.waitFor((s) => s.includes(TITLE), 15_000)
 
-  // ---- assert: the W4.A repo-grouped sidebar shows the task under
-  //      its repo header. The repo's basename ("my-frontend") is the
-  //      header label; the task title appears below it. PTY-flattened
-  //      normalization collapses some whitespace but the substring
-  //      `my-frontend ... 1 ... delete-me` stays embedded.
-  await kobe.waitFor((s) => /my-frontend\s*1[\s\S]{0,200}delete-me/.test(s), 15_000)
+  // ---- assert: Wave 4.5 flat sidebar shows the task under the
+  //      "Working session" tab. We anchor on the always-rendered tab
+  //      label + task title.
+  await kobe.waitFor((s) => s.includes("Working session") && s.includes("delete-me"), 15_000)
   const beforeDelete = await kobe.capture()
-  expect(/my-frontend\s*1[\s\S]{0,200}delete-me/.test(beforeDelete)).toBe(true)
+  expect(beforeDelete).toContain("Working session")
+  expect(beforeDelete).toContain("delete-me")
 
-  // The worktree's on-disk path is `<repo>/.kobe/worktrees/<id>/`.
+  // The worktree's on-disk path is `<repo>/.claude/worktrees/<id>/`.
   // We don't know the ULID id from outside, so we read the
   // manifest the orchestrator just wrote. `createTask` does TWO
   // saves: (1) placeholder with empty branch/worktreePath, (2)

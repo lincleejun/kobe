@@ -312,7 +312,6 @@ function appendRowsFromMessage(rows: ChatRow[], toolIndexById: Map<string, numbe
         // case.
         rows.push({ kind: "tool", name: "", input: undefined, output, done: true, ts })
       }
-      continue
     }
     // Other block types (thinking, image, redacted_thinking, …) are
     // intentionally dropped: kobe doesn't render them yet, and the

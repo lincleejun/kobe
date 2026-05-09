@@ -18,6 +18,6 @@ export {
   type SidebarControllerOpts,
   createSidebarController,
 } from "./controller"
-export { type SidebarRow, buildRows, flattenIds, groupByRepo, repoLabel } from "./groups"
+export { type SidebarRow, type SidebarView, buildRows, filterByView, flattenIds } from "./groups"
 export { useSidebarBindings } from "./keys"
 export { Sidebar, type SidebarProps } from "./Sidebar"

@@ -61,6 +61,19 @@ export type SidebarBindingsOpts = {
    * catch `ctrl+d`.
    */
   onDeleteRequest?: (taskId: string) => void
+  /**
+   * Archive-toggle callback. Fires on `a` with the task id under the
+   * cursor. Wave 4.5 — flips `task.archived` between true and false,
+   * which moves the row between the "Working session" and "Archives"
+   * views. Optional; like delete, the parent owns the orchestrator
+   * call so the sidebar stays a stateless view.
+   */
+  onArchiveRequest?: (taskId: string) => void
+  /**
+   * View-switch callback. Fires on `[` (-1, "previous view") and `]`
+   * (+1, "next view"). The parent owns the active-view signal.
+   */
+  onViewSwitch?: (delta: -1 | 1) => void
 }
 
 /**
@@ -121,6 +134,27 @@ export function useSidebarBindings(opts: SidebarBindingsOpts): void {
           opts.onDeleteRequest?.(id)
         },
       },
+      {
+        // `a` = toggle archived on the cursor task. In the active view
+        // it moves the row to Archives; in the archived view it brings
+        // it back. Same id-resolution as `d`.
+        key: "a",
+        cmd: () => {
+          const ids = opts.flatTaskIds()
+          const idx = opts.cursorIndex()
+          if (idx < 0 || idx >= ids.length) return
+          const id = ids[idx]
+          if (id === undefined) return
+          opts.onArchiveRequest?.(id)
+        },
+      },
+      // `[` / `]` switch between the Working session and Archives
+      // views. Two views today, so both keys do the same thing
+      // (toggle), but the +1 / -1 signal is preserved so a future
+      // third view (e.g. "Stale" / "Pinned") slots in without a
+      // binding rewrite.
+      { key: "[", cmd: () => opts.onViewSwitch?.(-1) },
+      { key: "]", cmd: () => opts.onViewSwitch?.(1) },
     ],
   }))
 }
