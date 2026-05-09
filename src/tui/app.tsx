@@ -31,9 +31,9 @@ import { TaskIndexStore } from "../orchestrator/index/store.ts"
 import { GitWorktreeManager } from "../orchestrator/worktree/manager.ts"
 import type { AIEngine } from "../types/engine.ts"
 import type { Task } from "../types/task.ts"
-import { HSplitBorder, SplitBorder } from "./component/border"
 import { CreatePRButton } from "./component/create-pr-button"
 import { HelpDialog } from "./component/help-dialog"
+import { ResizableEdge } from "./component/resizable-edge"
 import { CommandPaletteProvider } from "./context/command-palette"
 import { FocusProvider, type PaneId, useFocus } from "./context/focus"
 import { useKobeKeybindings } from "./context/keybindings"
@@ -583,25 +583,62 @@ function Shell(props: AppDeps) {
   const [previewApi, setPreviewApi] = createSignal<PreviewApi | null>(null)
 
   /* ------------------------------------------------------------------- */
-  /*  Splitter spike — sidebar ↔ workspace drag resize                    */
+  /*  Pane resize — three <ResizableEdge /> splitters                     */
   /* ------------------------------------------------------------------- */
-  // Minimal validation for draggable pane borders. Sidebar default 42
-  // (matches the long-standing "history rail" convention from
-  // opencode/agent-deck), with a hard floor at 20 cells (below that the
-  // status badges + first 8-10 chars of a task title stop being legible).
-  // Max is `terminalWidth - MIN_REMAINING` so the chat/right-column doesn't
-  // collapse. The right border of the sidebar wrapper IS the drag handle:
-  // we edge-detect on mouseDown (click hit the column == sidebarWidth - 1)
-  // and only treat subsequent drags as resize. Other clicks in the sidebar
-  // continue to focus the pane via onMouseUp as before.
+  // Sidebar default 42 (the long-standing "history rail" convention from
+  // opencode/agent-deck). Workspace and files are seeded from the
+  // pre-resize 2:1 flex ratio so the layout looks the same on first paint
+  // and starts diverging only when the user drags. We keep the sizes as
+  // plain numbers (not optional) so the layout is always controlled —
+  // simpler than juggling a "have they dragged yet" flag, at the cost of
+  // not auto-rebalancing on terminal resize (just clamps to fit).
+  //
+  // Mins: sidebar 20 (status badge + first 8-10 chars of a title still
+  // legible); workspace 30 (chat needs room to breathe); right column min
+  // is implicit via "max workspace = total - sidebar - 1 splitter - min
+  // right". Files min 5 / terminal min 5 (header + ~3 rows of content).
   const MIN_SIDEBAR_WIDTH = 20
-  const MIN_REMAINING_WIDTH = 40
+  const MIN_WORKSPACE_WIDTH = 30
+  const MIN_RIGHT_COLUMN_WIDTH = 30
+  const MIN_FILES_HEIGHT = 5
+  const MIN_TERMINAL_HEIGHT = 5
   const dims = useTerminalDimensions()
   const [sidebarWidth, setSidebarWidth] = createSignal(42)
-  const [draggingSidebar, setDraggingSidebar] = createSignal(false)
+  // Initial workspace / files seeds: computed once from the terminal
+  // dims at mount. These are deliberately not reactive to terminal
+  // resizes — the user's last drag wins. Negative or undersized
+  // terminals just get clamped on first paint.
+  const initialDims = dims()
+  const [workspaceWidth, setWorkspaceWidth] = createSignal(
+    Math.max(MIN_WORKSPACE_WIDTH, Math.floor((initialDims.width - 42 - 1) * (2 / 3))),
+  )
+  // Right column inner height ≈ terminal - topbar - statusbar - 2 borders.
+  // Topbar/statusbar are 1 row each; HSplitBorder consumes 1 row.
+  const initialRightColumnHeight = Math.max(20, initialDims.height - 2 - 1)
+  const [filesHeight, setFilesHeight] = createSignal(
+    Math.max(MIN_FILES_HEIGHT, Math.floor(initialRightColumnHeight * (2 / 3))),
+  )
+
   const clampSidebar = (w: number) => {
-    const max = Math.max(MIN_SIDEBAR_WIDTH, dims().width - MIN_REMAINING_WIDTH)
+    const max = Math.max(
+      MIN_SIDEBAR_WIDTH,
+      dims().width - workspaceWidth() - MIN_RIGHT_COLUMN_WIDTH - 2 /* two splitters */,
+    )
     return Math.min(max, Math.max(MIN_SIDEBAR_WIDTH, w))
+  }
+  const clampWorkspace = (w: number) => {
+    const max = Math.max(
+      MIN_WORKSPACE_WIDTH,
+      dims().width - sidebarWidth() - MIN_RIGHT_COLUMN_WIDTH - 2 /* two splitters */,
+    )
+    return Math.min(max, Math.max(MIN_WORKSPACE_WIDTH, w))
+  }
+  const clampFiles = (h: number) => {
+    // Files height max = right column height - terminal min - 1 (splitter).
+    // We approximate right column height as `dims.height - topbar - statusbar`.
+    const rightColH = Math.max(MIN_FILES_HEIGHT + MIN_TERMINAL_HEIGHT + 1, dims().height - 2)
+    const max = Math.max(MIN_FILES_HEIGHT, rightColH - MIN_TERMINAL_HEIGHT - 1)
+    return Math.min(max, Math.max(MIN_FILES_HEIGHT, h))
   }
 
   /* ------------------------------------------------------------------- */
@@ -897,35 +934,9 @@ function Shell(props: AppDeps) {
       <TopBar activeTitle={activeTask()?.title} orchestrator={props.orchestrator} activeTask={activeTask} />
       <box flexDirection="row" flexGrow={1}>
         {/* Left: task sidebar. Click anywhere on the sidebar pane to
-            focus it. Border on the right edge lights up green when
-            sidebar is the active pane. */}
-        <box
-          flexShrink={0}
-          flexDirection="column"
-          onMouseDown={(e: { x: number }) => {
-            // Edge-detect: the right border occupies the rightmost cell of
-            // the sidebar wrapper (column index = sidebarWidth() - 1 in
-            // global terminal coords, since the sidebar starts at x=0).
-            if (e.x === sidebarWidth() - 1) setDraggingSidebar(true)
-          }}
-          onMouseDrag={(e: { x: number }) => {
-            if (!draggingSidebar()) return
-            // event.x is the cursor's current column; new sidebar width is
-            // x+1 so the border lands on the cursor's column.
-            setSidebarWidth(clampSidebar(e.x + 1))
-          }}
-          onMouseDragEnd={() => setDraggingSidebar(false)}
-          onMouseUp={() => {
-            if (draggingSidebar()) {
-              setDraggingSidebar(false)
-              return
-            }
-            setFocusedPane("sidebar")
-          }}
-          border={["right"]}
-          customBorderChars={SplitBorder.customBorderChars}
-          borderColor={draggingSidebar() ? theme.accent : isFocused("sidebar")() ? theme.success : theme.border}
-        >
+            focus it. The right edge is a separate <ResizableEdge /> that
+            owns the drag-to-resize affordance plus hover/focus colors. */}
+        <box flexShrink={0} flexDirection="column" onMouseUp={() => setFocusedPane("sidebar")}>
           <Sidebar
             width={sidebarWidth}
             tasks={tasksAcc}
@@ -950,18 +961,23 @@ function Shell(props: AppDeps) {
             focused={isFocused("sidebar")}
           />
         </box>
+        {/* Sidebar ↔ workspace splitter. */}
+        <ResizableEdge
+          orientation="vertical"
+          size={sidebarWidth}
+          setSize={setSidebarWidth}
+          clamp={clampSidebar}
+          focused={isFocused("sidebar")}
+        />
         {/* Center: tabbed (chat | <file>...) — primary interaction surface.
-            Border lights up green when workspace is focused. Center gets
-            twice the flex share of the right column. */}
+            Width controlled by workspaceWidth; the right edge is a
+            <ResizableEdge /> sibling rather than a `border={["right"]}`
+            on this box. */}
         <box
           flexDirection="column"
-          flexGrow={2}
-          flexShrink={1}
-          flexBasis={0}
+          flexShrink={0}
+          width={workspaceWidth()}
           onMouseUp={() => setFocusedPane("workspace")}
-          border={["right"]}
-          customBorderChars={SplitBorder.customBorderChars}
-          borderColor={isFocused("workspace")() ? theme.success : theme.border}
         >
           <PaneHeader
             title="WORKSPACE"
@@ -1000,36 +1016,39 @@ function Shell(props: AppDeps) {
             </Show>
           </box>
         </box>
-        {/* Right column: FILES top + TERMINAL bottom. Each gets a CAPS
-            pane header. Vertical separator from center via `border=["left"]`,
-            horizontal split between FILES and TERMINAL via a thin row.
-
-            Width: flex-first per CLAUDE.md. The center workspace gets
-            twice the share (flexGrow={2}) of this right column
-            (flexGrow={1}); shrink-allowed so very-narrow terminals don't
-            blow up. No magic-constant pixel widths here. */}
+        {/* Workspace ↔ right column splitter. */}
+        <ResizableEdge
+          orientation="vertical"
+          size={workspaceWidth}
+          setSize={setWorkspaceWidth}
+          clamp={clampWorkspace}
+          focused={isFocused("workspace")}
+        />
+        {/* Right column: FILES top + TERMINAL bottom. Width absorbs the
+            remainder via flexGrow={1}; the FILES↔TERMINAL split is a
+            <ResizableEdge orientation="horizontal" /> with a controlled
+            filesHeight signal driving the upper pane. */}
         <box flexDirection="column" flexGrow={1} flexShrink={1} flexBasis={0}>
-          <box
-            flexGrow={2}
-            flexShrink={1}
-            flexBasis={0}
-            flexDirection="column"
-            onMouseUp={() => setFocusedPane("files")}
-          >
+          <box flexShrink={0} height={filesHeight()} flexDirection="column" onMouseUp={() => setFocusedPane("files")}>
             <PaneHeader title="FILES" focused={focusedPane() === "files"} />
             <box flexGrow={1}>
               <FileTree worktreePath={worktreePathAcc} onOpenFile={openFileInCenter} focused={isFocused("files")} />
             </box>
           </box>
+          {/* Files ↔ terminal splitter. */}
+          <ResizableEdge
+            orientation="horizontal"
+            size={filesHeight}
+            setSize={setFilesHeight}
+            clamp={clampFiles}
+            focused={isFocused("files")}
+          />
           <box
             flexGrow={1}
             flexShrink={1}
             flexBasis={0}
             flexDirection="column"
             onMouseUp={() => setFocusedPane("terminal")}
-            border={["top"]}
-            customBorderChars={HSplitBorder.customBorderChars}
-            borderColor={isFocused("terminal")() ? theme.success : theme.border}
           >
             <PaneHeader
               title="TERMINAL"
@@ -1064,10 +1083,8 @@ function CenterTabStrip(props: {
       flexDirection="row"
       gap={1}
       flexShrink={0}
-      paddingTop={0}
       paddingLeft={1}
       paddingRight={1}
-      paddingBottom={1}
       backgroundColor={theme.backgroundPanel}
     >
       <box
