@@ -182,6 +182,30 @@ export function Chat(props: ChatProps) {
   })
   const isCanceled = () => taskStatus() === "canceled"
 
+  // True when the message list ends with an unresolved approval/question
+  // row. While a user-input request is pending we lock the composer:
+  //   - The subprocess was killed (orchestrator.pumpEvents stops it on
+  //     tool.start so the model can't yap past the picker).
+  //   - The picker IS the only valid next action; typing a freeform
+  //     prompt would resume the session ahead of the picker's answer
+  //     and the model would see "[user said something else]" instead of
+  //     "[plan approved] / [question answered]".
+  // Scans from the end so a long history doesn't cost more than O(few)
+  // — the picker is always near the bottom. Stops at the first user/
+  // assistant row because anything newer than the picker means the
+  // conversation moved on (i.e. the picker was already resolved).
+  const hasPendingInput = createMemo(() => {
+    const msgs = state().messages
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const m = msgs[i]
+      if (!m) continue
+      if (m.kind === "approval") return m.status === "pending"
+      if (m.kind === "question") return m.answers === null
+      if (m.kind === "user" || m.kind === "assistant") return false
+    }
+    return false
+  })
+
   // Per-task permission mode read off the orchestrator's tasksSignal so
   // shift+tab updates land in the indicator the same tick the store
   // mutates. Undefined when no task is selected; the composer reads
@@ -542,8 +566,14 @@ export function Chat(props: ChatProps) {
         draft={draft()}
         onDraftChange={setDraft}
         isStreaming={state().isStreaming}
-        hasTask={props.taskId() !== undefined && !isCanceled()}
-        noTaskMessage={isCanceled() ? "(task canceled — pick another or press ctrl+n to create)" : undefined}
+        hasTask={props.taskId() !== undefined && !isCanceled() && !hasPendingInput()}
+        noTaskMessage={
+          isCanceled()
+            ? "(task canceled — pick another or press ctrl+n to create)"
+            : hasPendingInput()
+              ? "(answer the prompt above to continue)"
+              : undefined
+        }
         onSubmit={handleComposerSubmit}
         focused={props.focused}
         historyKey={props.taskId()}

@@ -786,6 +786,7 @@ export class Orchestrator {
 
   private async pumpEvents(taskId: TaskId, handle: SessionHandle): Promise<void> {
     let terminal: "done" | "error" | null = null
+    let killedForInput = false
     try {
       for await (const ev of this.engine.stream(handle)) {
         this.dispatchEvent(taskId, ev)
@@ -810,6 +811,23 @@ export class Orchestrator {
             requestId,
             payload: inputReq,
           })
+          // STOP the subprocess. In `claude -p` mode the user-input
+          // tools (ExitPlanMode, AskUserQuestion) return immediately
+          // with empty/default answers and the model just keeps yapping
+          // past the request — the picker shows up AFTER the model's
+          // "looks like you didn't answer" text. Killing here freezes
+          // the conversation at the request; respondToInput resumes the
+          // same session via --resume with the user's actual answer.
+          // Distinct from a `done`/`error` terminal so the finally
+          // block doesn't write a terminal status — task stays in
+          // in_progress while we wait for the user.
+          killedForInput = true
+          try {
+            await this.engine.stop(handle)
+          } catch {
+            /* best-effort kill; the for-await still ends */
+          }
+          break
         }
         if (ev.type === "done") terminal = "done"
         else if (ev.type === "error") terminal = "error"
@@ -818,7 +836,7 @@ export class Orchestrator {
       // Drop the handle whether we exited cleanly or via throw.
       this.handles.delete(taskId)
       this.pumps.delete(taskId)
-      if (terminal) {
+      if (terminal && !killedForInput) {
         try {
           await this.store.update(taskId, {
             status: terminal === "done" ? "done" : "error",
@@ -827,6 +845,8 @@ export class Orchestrator {
           /* store may have been cleared in tests; ignore */
         }
       }
+      // killedForInput case: leave status as in_progress — the user is
+      // about to answer and we'll resume via respondToInput → runTask.
       // The store's listener bus refreshes the signal automatically on
       // the `update` above. No explicit refresh needed here.
     }
