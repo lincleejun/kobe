@@ -48,8 +48,8 @@
  *     to the new one (Solid `createEffect` returns the cleanup).
  */
 
-import { TextAttributes } from "@opentui/core"
-import { type Accessor, Show, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js"
+import { type ScrollBoxRenderable, TextAttributes } from "@opentui/core"
+import { type Accessor, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount } from "solid-js"
 import type { Orchestrator } from "../../../orchestrator/core.ts"
 import type { OrchestratorEvent } from "../../../types/engine.ts"
 import { useTheme } from "../../context/theme"
@@ -154,16 +154,57 @@ export function Chat(props: ChatProps) {
               // Only apply if we haven't switched tasks since.
               if (props.taskId() !== taskId) return
               setState((s) => setMessagesFromHistory(s, past))
+              // History just landed: jump to the most recent message
+              // unconditionally. The follow-mode createEffect won't
+              // catch this case because the scrollbox was sitting at
+              // scrollTop=0 with a small scrollHeight before the load.
+              queueMicrotask(scrollToBottom)
             })
             .catch((err) => {
               setState((s) => pushSystemError(s, `history load failed: ${stringifyErr(err)}`))
             })
         }
+        // Task switch resets the viewport regardless of history outcome
+        // (e.g. brand-new task with no sessionId).
+        queueMicrotask(scrollToBottom)
 
         return unsubscribe
       },
     ),
   )
+
+  // Scroll anchor — used to force the message list back to the bottom
+  // when the chat tab (re)opens or the user switches tasks. opentui's
+  // `stickyScroll` keeps follow-mode working for *incremental* growth,
+  // but it doesn't re-anchor when content is loaded asynchronously
+  // (history fetch) or when the scrollbox is freshly mounted with
+  // pre-existing messages — both common paths here. We explicitly call
+  // `scrollTo` on mount, on task switch, and right after history lands.
+  let scrollRef: ScrollBoxRenderable | undefined
+  function scrollToBottom(): void {
+    const r = scrollRef
+    if (!r) return
+    r.scrollTo({ x: 0, y: r.scrollHeight })
+  }
+
+  onMount(() => {
+    queueMicrotask(scrollToBottom)
+  })
+
+  // After every render that could grow the list, snap to the bottom —
+  // BUT only while the user is still in follow mode (scrollTop near
+  // scrollHeight). If they've manually scrolled up to read history,
+  // don't yank them back. The 2-row tolerance accounts for the
+  // padding that lives at the top of the message list.
+  createEffect(() => {
+    void state().messages.length
+    queueMicrotask(() => {
+      const r = scrollRef
+      if (!r) return
+      const distanceFromBottom = r.scrollHeight - r.scrollTop - r.height
+      if (distanceFromBottom <= 2) r.scrollTo({ x: 0, y: r.scrollHeight })
+    })
+  })
 
   // Pending-prompt watcher: separate from the task-switch effect
   // because the orchestrator's auto-select-first-task logic in app.tsx
@@ -296,6 +337,9 @@ export function Chat(props: ChatProps) {
       {/* Message list. */}
       <Show when={props.taskId()}>
         <scrollbox
+          ref={(r: ScrollBoxRenderable) => {
+            scrollRef = r
+          }}
           flexGrow={1}
           stickyScroll={true}
           stickyStart="bottom"
