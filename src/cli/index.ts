@@ -1,3 +1,4 @@
+#!/usr/bin/env bun
 /**
  * kobe CLI entry point.
  *

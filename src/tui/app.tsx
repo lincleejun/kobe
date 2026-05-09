@@ -24,7 +24,9 @@ import { homedir } from "node:os"
 import { basename, join } from "node:path"
 import { TextAttributes } from "@opentui/core"
 import { render, useTerminalDimensions } from "@opentui/solid"
-import { type Accessor, For, Match, Show, Switch, createEffect, createMemo, createSignal } from "solid-js"
+import { type Accessor, For, Match, Show, Switch, createEffect, createMemo, createSignal, onMount } from "solid-js"
+import pkg from "../../package.json" with { type: "json" }
+import { type UpdateInfo, checkLatestVersion } from "../version.ts"
 import { ClaudeCodeLocal } from "../engine/claude-code-local/index.ts"
 import { Orchestrator } from "../orchestrator/core.ts"
 import { TaskIndexStore } from "../orchestrator/index/store.ts"
@@ -489,43 +491,45 @@ function StatusBar() {
 }
 
 function TopBar(props: {
-  activeTitle?: string
   orchestrator: Orchestrator
   activeTask: Accessor<Task | undefined>
+  updateInfo: Accessor<UpdateInfo | null>
 }) {
   const { theme } = useTheme()
-  // Wave 4.5: surface the selected task's repo + branch in the topbar
-  // (the sidebar dropped its repo grouping). Format: `Repo <basename> > <branch>`.
-  // We use the repo basename — the absolute path is too noisy for a
-  // 80-cell terminal; the branch name is rendered verbatim. Worktree
-  // path was deliberately dropped per Jackson's preference — it was
-  // taking up too much space and the composer / filetree already make
-  // the worktree visible.
-  const repoLabel = () => {
-    const task = props.activeTask()
-    if (!task) return ""
-    const parts = task.repo.split("/")
-    return parts[parts.length - 1] || task.repo
-  }
+  // Three columns of equal flex so the center sits at the geometric
+  // midpoint regardless of the left brand width or the right PR button
+  // width. Left = brand+version. Center = active task's branch (no
+  // "Repo <name>" prefix — kobe spans many repos so a single repo
+  // label in the topbar is misleading; the active branch alone is the
+  // useful per-task signal). Right = PR action.
   return (
-    <box flexDirection="row" justifyContent="space-between" paddingLeft={1} paddingRight={1} flexShrink={0}>
-      <box flexDirection="row" flexShrink={1} gap={1}>
+    <box flexDirection="row" paddingLeft={1} paddingRight={1} flexShrink={0}>
+      <box flexDirection="row" flexGrow={1} flexShrink={1} flexBasis={0} gap={1} justifyContent="flex-start">
         <text fg={theme.primary} attributes={TextAttributes.BOLD}>
-          kobe
+          KobeCode
         </text>
-        <text fg={theme.textMuted}>—</text>
-        <text fg={theme.text} attributes={TextAttributes.BOLD}>
-          {props.activeTitle ?? "no task selected"}
-        </text>
-        <Show when={props.activeTask() !== undefined}>
-          <text fg={theme.textMuted}>·</text>
-          <text fg={theme.textMuted}>Repo</text>
-          <text fg={theme.text}>{repoLabel()}</text>
-          <text fg={theme.textMuted}>&gt;</text>
-          <text fg={theme.text}>{props.activeTask()?.branch}</text>
+        <text fg={theme.textMuted}>v{pkg.version}</text>
+        {/* Update chip — only renders when the npm-registry check found
+            a newer published version. Informational only; the user is
+            expected to run `bun install -g @sma1lboy/kobe@latest`
+            (or the equivalent) themselves. The fetch is async and
+            cached, so this stays empty on cold boots without network. */}
+        <Show when={props.updateInfo()?.hasUpdate}>
+          <text fg={theme.warning} attributes={TextAttributes.BOLD}>
+            ↑ v{props.updateInfo()?.latest} available
+          </text>
         </Show>
       </box>
-      <CreatePRButton orchestrator={props.orchestrator} activeTask={props.activeTask} />
+      <box flexDirection="row" flexGrow={1} flexShrink={1} flexBasis={0} gap={1} justifyContent="center">
+        <Show when={props.activeTask() !== undefined}>
+          <text fg={theme.text} attributes={TextAttributes.BOLD} wrapMode="none">
+            {props.activeTask()?.branch}
+          </text>
+        </Show>
+      </box>
+      <box flexDirection="row" flexGrow={1} flexShrink={1} flexBasis={0} justifyContent="flex-end">
+        <CreatePRButton orchestrator={props.orchestrator} activeTask={props.activeTask} />
+      </box>
     </box>
   )
 }
@@ -547,6 +551,21 @@ function Shell(props: AppDeps) {
   // prompt the user typed in the dialog. The chat clears it on
   // consumption to avoid re-submission on resubscribe.
   const [pendingPrompt, setPendingPrompt] = createSignal<{ taskId: string; prompt: string } | null>(null)
+
+  // Background npm-registry version check. Cached for 6h on disk, so
+  // typical cold boots return synchronously off the cache. The first
+  // launch (or once per cache window) hits the network with a 3s
+  // timeout — failures are silent, the chip just doesn't render.
+  const [updateInfo, setUpdateInfo] = createSignal<UpdateInfo | null>(null)
+  onMount(() => {
+    void checkLatestVersion()
+      .then((info) => {
+        if (info) setUpdateInfo(info)
+      })
+      .catch(() => {
+        /* swallow — version check is best-effort */
+      })
+  })
 
   const activeTask = createMemo(() => {
     const id = selectedId()
@@ -962,7 +981,7 @@ function Shell(props: AppDeps) {
 
   return (
     <box flexDirection="column" flexGrow={1}>
-      <TopBar activeTitle={activeTask()?.title} orchestrator={props.orchestrator} activeTask={activeTask} />
+      <TopBar orchestrator={props.orchestrator} activeTask={activeTask} updateInfo={updateInfo} />
       <box flexDirection="row" flexGrow={1}>
         {/* Left: task sidebar. Click anywhere on the sidebar pane to
             focus it. The right edge is a separate <ResizableEdge /> that
