@@ -30,7 +30,7 @@ import { Orchestrator } from "../orchestrator/core.ts"
 import { TaskIndexStore } from "../orchestrator/index/store.ts"
 import { GitWorktreeManager } from "../orchestrator/worktree/manager.ts"
 import type { AIEngine } from "../types/engine.ts"
-import { SplitBorder } from "./component/border"
+import { HSplitBorder, SplitBorder } from "./component/border"
 import { HelpDialog } from "./component/help-dialog"
 import { CommandPaletteProvider } from "./context/command-palette"
 import { useKobeKeybindings } from "./context/keybindings"
@@ -545,7 +545,16 @@ function Shell(props: AppDeps) {
               <FileTree worktreePath={worktreePathAcc} onOpenFile={openFileInCenter} />
             </box>
           </box>
-          <box flexGrow={1} flexShrink={1} flexBasis={0} flexDirection="column" backgroundColor={theme.background}>
+          <box
+            flexGrow={1}
+            flexShrink={1}
+            flexBasis={0}
+            flexDirection="column"
+            backgroundColor={theme.background}
+            border={["top"]}
+            customBorderChars={HSplitBorder.customBorderChars}
+            borderColor={theme.border}
+          >
             <PaneHeader
               title="TERMINAL"
               subtitle={worktreePathAcc() ? worktreePathAcc()?.split("/").slice(-1)[0] : undefined}

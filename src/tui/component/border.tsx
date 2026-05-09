@@ -28,3 +28,15 @@ export const SplitBorder = {
     vertical: "┃",
   },
 }
+
+/**
+ * Horizontal sibling of {@link SplitBorder} — draws a heavy `━` line
+ * for top/bottom borders. Use with `border={["top"]}` to separate
+ * stacked panes (e.g. FILES above TERMINAL on kobe's right column).
+ */
+export const HSplitBorder = {
+  customBorderChars: {
+    ...EmptyBorder,
+    horizontal: "━",
+  },
+}
