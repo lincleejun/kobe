@@ -45,18 +45,9 @@
  */
 
 import { basename } from "node:path"
-import { TextAttributes } from "@opentui/core"
-import {
-  type Accessor,
-  For,
-  type JSXElement,
-  Show,
-  createEffect,
-  createMemo,
-  createSignal,
-  on,
-  onCleanup,
-} from "solid-js"
+import { type BoxRenderable, TextAttributes } from "@opentui/core"
+import { useRenderer } from "@opentui/solid"
+import { type Accessor, type JSXElement, Show, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js"
 import { stripAnsi } from "../../../../test/behavior/screen"
 import { useTheme } from "../../context/theme"
 import { useTerminalBindings } from "./keys"
@@ -229,6 +220,74 @@ export function Terminal(props: TerminalProps): JSXElement {
   // refers to the *live* viewport, not what's currently rendered.
   const showCursor = createMemo(() => focused() && scrollOffset() === 0 && cursor() !== null)
 
+  /* --------- native cursor positioning ----------
+   *
+   * opentui ships a real terminal cursor (the one the host emulator
+   * draws — block, blinking if the host supports it). Earlier we
+   * tried inline INVERSE-styled cells but they're hard to see against
+   * dim backgrounds AND don't match the rest of the app's typing
+   * affordances. So instead we drive opentui's own cursor: when the
+   * pane is focused and we know the pty cursor's (x,y), we ask the
+   * renderer to place the cursor at the body's absolute screen
+   * position + (cursor.x, cursor.y). Padding-1 is added to x because
+   * the body has paddingLeft=1 — the snapshot's column 0 lives at
+   * screen column body.screenX + 1.
+   *
+   * When the pane is unfocused or no cursor info is available, we
+   * hide it so the host terminal doesn't leave a stray block in the
+   * pane. The orchestrator-level cursor (e.g. the chat composer) will
+   * reposition it as soon as focus moves elsewhere.
+   *
+   * We ALSO push the body's measured (cols, rows) into the tmux pane
+   * via `pty.resize`. tmux's default 80×24 doesn't match our actual
+   * render area, and the cursor (x,y) it reports is in the *tmux*
+   * grid — without resizing, the prompt sits at one row in the kobe
+   * render but tmux's cursor lives in a different coordinate space,
+   * which is exactly the off-by-many-rows symptom the user reported.
+   */
+  let bodyRef: BoxRenderable | undefined
+  const renderer = useRenderer()
+
+  // Push the rendered body's geometry to tmux so cursor coords align.
+  createEffect(() => {
+    const handle = pty()
+    const ref = bodyRef
+    if (!handle || !ref) return
+    // Subtract the body's own paddingLeft/paddingRight (1+1) from the
+    // usable width so the shell doesn't try to write into the padding.
+    const cols = Math.max(20, ref.width - 2)
+    const rows = Math.max(4, ref.height)
+    try {
+      handle.resize(cols, rows)
+    } catch {
+      /* best effort — resize fails silently in tmux when geometry is unchanged */
+    }
+  })
+
+  // Drive the native cursor.
+  createEffect(() => {
+    const ref = bodyRef
+    if (!ref) return
+    const c = cursor()
+    if (!showCursor() || !c) {
+      // Hide the cursor by parking it off-screen with visible=false.
+      renderer.setCursorPosition(0, 0, false)
+      return
+    }
+    // body has paddingLeft=1, so column 0 of the snapshot is at screenX+1.
+    renderer.setCursorPosition(ref.screenX + 1 + c.x, ref.screenY + c.y, true)
+  })
+
+  // On unmount, hide the cursor so it doesn't leak into whichever pane
+  // gains focus next.
+  onCleanup(() => {
+    try {
+      renderer.setCursorPosition(0, 0, false)
+    } catch {
+      /* renderer may already be torn down */
+    }
+  })
+
   return (
     <box
       flexDirection="column"
@@ -258,59 +317,25 @@ export function Terminal(props: TerminalProps): JSXElement {
           </box>
         }
       >
-        <box flexGrow={1} flexDirection="column" paddingLeft={1} paddingRight={1}>
-          <For each={visibleLines()}>
-            {(line, i) => {
-              const isCursorLine = () => showCursor() && cursor()?.y === i()
-              return (
-                <Show
-                  when={isCursorLine()}
-                  fallback={
-                    <text fg={theme.text} wrapMode="none">
-                      {line}
-                    </text>
-                  }
-                >
-                  <CursorLine line={line} cursorX={cursor()?.x ?? 0} />
-                </Show>
-              )
-            }}
-          </For>
+        <box
+          ref={(r: BoxRenderable) => {
+            bodyRef = r
+          }}
+          flexGrow={1}
+          paddingLeft={1}
+          paddingRight={1}
+        >
+          {/* Single multi-line `<text>`. opentui's text renderable handles
+              `\n`-broken content with `wrapMode="none"`. We tried per-line
+              `<For>` rendering earlier — it works, but mixing `<text>`
+              and `<box>` siblings made laying out the cursor overlay
+              flaky, so the cursor is now driven through the renderer's
+              native cursor (see the createEffect above). */}
+          <text fg={theme.text} wrapMode="none">
+            {visibleLines().join("\n")}
+          </text>
         </box>
       </Show>
-    </box>
-  )
-}
-
-/**
- * Renders a single scrollback line that contains the pty cursor.
- * Splits the line into three text spans (pre / cursor-char / post) so
- * the cursor cell can carry the INVERSE attribute — that produces the
- * familiar block-cursor look without us having to track terminal colors.
- *
- * Edge cases:
- *   - Cursor past end-of-line: the line is right-padded with spaces so
- *     the cursor cell renders as " " inverted (a blank block).
- *   - cursorX === 0: the "before" span is empty; rendering an empty
- *     `<text>` in opentui is a no-op, so layout is unchanged.
- */
-function CursorLine(props: { line: string; cursorX: number }) {
-  const { theme } = useTheme()
-  const padded = createMemo(() => props.line.padEnd(props.cursorX + 1, " "))
-  const before = createMemo(() => padded().slice(0, props.cursorX))
-  const at = createMemo(() => padded().slice(props.cursorX, props.cursorX + 1) || " ")
-  const after = createMemo(() => padded().slice(props.cursorX + 1))
-  return (
-    <box flexDirection="row" flexShrink={0}>
-      <text fg={theme.text} wrapMode="none">
-        {before()}
-      </text>
-      <text fg={theme.text} attributes={TextAttributes.INVERSE} wrapMode="none">
-        {at()}
-      </text>
-      <text fg={theme.text} wrapMode="none">
-        {after()}
-      </text>
     </box>
   )
 }
