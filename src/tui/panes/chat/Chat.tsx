@@ -341,6 +341,33 @@ export function Chat(props: ChatProps) {
         // the readHistory await don't get lost.
         const unsubscribe = props.orchestrator.subscribeEvents(taskId, (ev: EngineEvent) => {
           setState((s) => applyEvent(s, ev))
+          // After a turn finishes, reload past from JSONL. The single-
+          // draftUser model can only hold ONE in-flight user message at
+          // a time — without this reload, the user's turn-N prompt gets
+          // overwritten by turn-N+1's pushDraftUser, and turn N's
+          // user/assistant pair vanishes from the visible history.
+          //
+          // By the time `done` fires, Claude Code has flushed the turn
+          // to JSONL (verified — readHistory after done returns the
+          // turn's records). We re-fetch and replace `past` with the
+          // canonical disk view; `setPast` also clears live + draftUser
+          // so the next turn starts from a known-clean state.
+          if (ev.type === "done" || ev.type === "error") {
+            const liveTaskId = props.taskId()
+            if (liveTaskId !== taskId) return
+            const t = props.orchestrator.getTask(taskId)
+            const sid = t?.sessionId
+            if (!sid) return
+            props.orchestrator
+              .readHistory(sid)
+              .then((past) => {
+                if (props.taskId() !== taskId) return
+                setState((s) => setPast(s, past))
+              })
+              .catch(() => {
+                /* ignore — keep showing current live snapshot */
+              })
+          }
         })
 
         // Load history if the task already has a sessionId. Brand-new
