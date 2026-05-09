@@ -611,23 +611,15 @@ export function Chat(props: ChatProps) {
 
   return (
     <box flexGrow={1} flexDirection="column" paddingLeft={1} paddingRight={1}>
-      {/* Header */}
-      <box paddingTop={1} paddingBottom={1} flexShrink={0} flexDirection="row" gap={1}>
-        <text fg={theme.primary} attributes={TextAttributes.BOLD}>
-          chat
-        </text>
-        <Show when={props.title?.()}>
-          <text fg={theme.textMuted}>—</text>
-          <text fg={theme.text}>{props.title?.()}</text>
-        </Show>
-      </box>
-
       {/* Tab bar — agent-deck-style bracket chips. Active tab fg is
           theme.accent + bold; inactive in textMuted. Rendered always
           (even with one tab) so users discover ctrl+t. Hidden when no
-          task is selected. */}
+          task is selected.
+          The redundant "chat — title" header line was dropped: the
+          workspace pane already shows the task title, and the tab bar
+          IS the chat-header for multi-tab. */}
       <Show when={props.taskId() && tabs().length > 0}>
-        <box flexDirection="row" flexShrink={0} gap={1} paddingBottom={1}>
+        <box paddingTop={1} flexDirection="row" flexShrink={0} gap={1} paddingBottom={1}>
           <For each={tabs()}>
             {(tab, i) => {
               const isActive = () => activeTabId() === tab.id

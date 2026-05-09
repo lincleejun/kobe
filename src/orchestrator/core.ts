@@ -236,7 +236,7 @@ export class Orchestrator {
    * `ensureWorktree` falls back to deterministic defaults if the
    * map is missing the entry.
    */
-  private readonly pendingWorktreeOpts = new Map<TaskId, { branch: string; baseRef?: string }>()
+  private readonly pendingWorktreeOpts = new Map<TaskId, { branch?: string; baseRef?: string }>()
 
   private readonly tasksAcc: Accessor<Task[]>
   private readonly setTasks: (next: Task[]) => void
@@ -330,7 +330,6 @@ export class Orchestrator {
     // createTask and runTask drops the user's branch/baseRef choice,
     // which is acceptable because the new-task flow is always
     // followed by an immediate first prompt.)
-    const branch = input.branch ?? autoBranch(finalTitle, "" /* id assigned below */)
     const created = await this.store.create({
       title: finalTitle,
       repo: input.repo,
@@ -340,8 +339,12 @@ export class Orchestrator {
       status: "backlog",
       archived: false,
     })
+    // Branch is allocated lazily so the auto-name's ulid suffix uses
+    // the real task id (computing it before `store.create` would slug
+    // an empty suffix). Persist only the user's explicit override (if
+    // any) and baseRef; ensureWorktree re-derives auto names.
     this.pendingWorktreeOpts.set(created.id, {
-      branch,
+      branch: input.branch,
       baseRef: input.baseRef,
     })
     return created
