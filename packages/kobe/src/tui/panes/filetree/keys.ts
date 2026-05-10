@@ -35,12 +35,8 @@ import { useBindings } from "../../lib/keymap"
  * imports the hook from here). */
 export type FileTreeTab = "all" | "changes" | "checks"
 
-/** Map a numeric key press to its tab. */
-export const TAB_FOR_KEY: Record<"1" | "2" | "3", FileTreeTab> = {
-  "1": "all",
-  "2": "changes",
-  "3": "checks",
-}
+/** Tab order for `[`/`]` cycling. Same source-order as the visible chips. */
+export const TAB_ORDER: readonly FileTreeTab[] = ["all", "changes", "checks"]
 
 export type FileTreeBindingsOpts = {
   /** Whether the pane should respond to keys. Default `() => true`. */
@@ -49,8 +45,11 @@ export type FileTreeBindingsOpts = {
   moveDown: () => void
   /** Move the cursor to the previous visible row. */
   moveUp: () => void
-  /** Switch to a tab. */
+  /** Switch to a tab (used both by mouse-clicks and the cycle handler below). */
   setTab: (tab: FileTreeTab) => void
+  /** Returns the currently active tab — the cycle handler reads it to
+   *  know where `[`/`]` should land relative to the current selection. */
+  currentTab: Accessor<FileTreeTab>
   /** Activate the row under the cursor (calls `onOpenFile` upstream). */
   openCurrent: () => void
   /** Force a reload of the current tab's data. */
@@ -71,17 +70,13 @@ export function useFileTreeBindings(opts: FileTreeBindingsOpts): void {
         else if (evt.name === "k" || evt.name === "up") opts.moveUp()
       },
       "files.tab": (evt) => {
-        switch (evt.name) {
-          case "1":
-            opts.setTab("all")
-            break
-          case "2":
-            opts.setTab("changes")
-            break
-          case "3":
-            opts.setTab("checks")
-            break
-        }
+        const cur = opts.currentTab()
+        const idx = TAB_ORDER.indexOf(cur)
+        if (idx < 0) return
+        const delta = evt.name === "[" ? -1 : evt.name === "]" ? 1 : 0
+        if (delta === 0) return
+        const next = TAB_ORDER[(idx + delta + TAB_ORDER.length) % TAB_ORDER.length]
+        if (next) opts.setTab(next)
       },
       "files.open": () => opts.openCurrent(),
       "files.refresh": () => opts.refresh(),

@@ -1824,9 +1824,14 @@ function CenterTabStrip(props: {
             // workspace tab at all.
             const isPrimary = () => props.isChatActive() && props.activeChatTabId() === tab.id
             const isVisibleButOther = () => props.isChatActive() && !isPrimary()
+            // Show a bold leading digit (1..9) so the user sees the
+            // ctrl+N chord that picks this tab. Capped at 9 because
+            // chat.tab.pick only registers ctrl+1..9.
+            const ordinal = () => (i() < 9 ? String(i() + 1) : "")
             return (
               <box
                 flexDirection="row"
+                gap={1}
                 paddingLeft={1}
                 paddingRight={1}
                 backgroundColor={isPrimary() ? theme.primary : theme.backgroundElement}
@@ -1835,6 +1840,15 @@ function CenterTabStrip(props: {
                   props.onSelectChatTab(tab.id)
                 }}
               >
+                <Show when={ordinal()}>
+                  <text
+                    fg={isPrimary() ? theme.selectedListItemText : isVisibleButOther() ? theme.text : theme.textMuted}
+                    attributes={TextAttributes.BOLD}
+                    wrapMode="none"
+                  >
+                    {ordinal()}
+                  </text>
+                </Show>
                 <text
                   fg={isPrimary() ? theme.selectedListItemText : isVisibleButOther() ? theme.text : theme.textMuted}
                   attributes={isPrimary() ? TextAttributes.BOLD : undefined}

@@ -427,12 +427,17 @@ export const KobeKeymap: readonly KobeBinding[] = [
     hint: { keys: "enter", label: "open" },
   },
   {
+    // `[` / `]` cycle the All / Changes / Checks tabs. Single-digit
+    // 1/2/3 used to be the chord but it conflicted with composer
+    // typing once focus crossed panes, and the bracket pair matches
+    // the sidebar's Working/Archives view-switcher so the muscle
+    // memory is consistent across panes.
     id: "files.tab",
     scope: "files",
-    keys: ["1", "2", "3"],
+    keys: ["[", "]"],
     category: "Files",
-    description: "Switch tab (All / Changes / Checks)",
-    hint: { keys: "1/2/3", label: "tab" },
+    description: "Switch tab (cycle All / Changes / Checks)",
+    hint: { keys: "[/]", label: "tab" },
   },
   {
     id: "files.refresh",

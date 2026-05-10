@@ -23,4 +23,4 @@ export {
   parsePorcelain,
   statusFiles,
 } from "./git"
-export { type FileTreeTab, TAB_FOR_KEY, useFileTreeBindings } from "./keys"
+export { type FileTreeTab, TAB_ORDER, useFileTreeBindings } from "./keys"
