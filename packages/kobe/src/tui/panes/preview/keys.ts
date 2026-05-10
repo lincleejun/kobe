@@ -124,8 +124,21 @@ export function usePreviewBindings(opts: PreviewBindingsOpts): void {
 
   useBindings(() => {
     const ext = opts.externalTabControl?.() ?? false
+    // When the parent owns the tab strip we still keep ctrl+w wired so
+    // the user can close from inside the focused preview body — it just
+    // delegates upward via `closeActive` (the component routes external
+    // closes through `onExternalClose`). Tab/shift+tab cycling is the
+    // parent's job in external mode and stays suppressed there.
     const tabBindings = ext
-      ? []
+      ? [
+          {
+            key: "ctrl+w",
+            cmd: () => {
+              disarmChord()
+              opts.closeActive()
+            },
+          },
+        ]
       : [
           {
             key: "tab",

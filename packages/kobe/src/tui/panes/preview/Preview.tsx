@@ -64,6 +64,13 @@ export type PreviewProps = {
    * file body — the parent drives state via the imperative {@link PreviewApi}.
    */
   hideInternalTabs?: Accessor<boolean>
+  /**
+   * Called when the user presses `ctrl+w` while `hideInternalTabs` is
+   * true. The parent owns the tab strip in that mode, so closing has
+   * to delegate back. Receives the active tab's path. No-op default
+   * keeps the binding harmless when the parent doesn't care.
+   */
+  onExternalClose?: (relPath: string) => void
 }
 
 /** Imperative API the parent drives. Stable for the component's lifetime. */
@@ -263,6 +270,14 @@ export function Preview(props: PreviewProps) {
     closeActive: () => {
       const cur = active()
       if (!cur) return
+      // When the parent owns the tab strip (CenterTabStrip in app.tsx),
+      // delegate close so the parent's tab list stays the source of
+      // truth — otherwise ctrl+w clears Preview's internal mirror but
+      // the parent's strip still shows the tab.
+      if (props.hideInternalTabs?.() && props.onExternalClose) {
+        props.onExternalClose(cur.path)
+        return
+      }
       setState((s) => closeTab(s, cur.path))
     },
     scrollBy: (delta) => {
