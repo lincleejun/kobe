@@ -141,7 +141,7 @@ If you find yourself reaching for a magic constant: pause, and verify a flex pro
 
 - **Phase 0**: foundation. Streams 0.1 (bootstrap, solo), then Foundation Team (0.2 + 0.3 + 0.4) in parallel. **Closed.**
 - **Phase 1**: build the 5-pane Conductor-shaped TUI. Waves 1–4 per `docs/PLAN.md`. **Closed at gate G4 on 2026-05-09 — shipped as `@sma1lboy/kobe@0.1.0` on npm.** See [`CHANGELOG.md`](./CHANGELOG.md) for the 0.1.0 feature manifest.
-- **Phase 2**: deferred. Conductor-as-backend mode. Hook points designed in; impl not yet.
+- **Phase 2**: dropped 2026-05-09. Originally a defensive hedge for "what if we ever swap engines." No real product driver — kobe's value is the UI, the local `claude` subprocess works, and Anthropic's API already covers shared/cloud sessions. Free up the design space; revisit only if a concrete engine-swap need surfaces.
 
 Update this section's status as gates G0–G4 close. See PLAN.md for the canonical state.
 
