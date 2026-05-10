@@ -22,10 +22,8 @@
 
 import { homedir } from "node:os"
 import { join } from "node:path"
-import { TextAttributes } from "@opentui/core"
 import { render, useRenderer, useTerminalDimensions } from "@opentui/solid"
-import { type Accessor, For, Show, createEffect, createMemo, createSignal, on, onMount } from "solid-js"
-import pkg from "../../package.json" with { type: "json" }
+import { type Accessor, Show, createEffect, createMemo, createSignal, on, onMount } from "solid-js"
 import { connectOrStartDaemon } from "../client/daemon-process.ts"
 import { type KobeOrchestrator, RemoteOrchestrator } from "../client/remote-orchestrator.ts"
 import { ClaudeCodeLocal } from "../engine/claude-code-local/index.ts"
@@ -34,18 +32,19 @@ import { TaskIndexStore } from "../orchestrator/index/store.ts"
 import { GitWorktreeManager } from "../orchestrator/worktree/manager.ts"
 import { getSavedRepos, removeSavedRepo } from "../state/repos.ts"
 import type { AIEngine } from "../types/engine.ts"
-import type { ChatTab, Task } from "../types/task.ts"
+import type { ChatTab } from "../types/task.ts"
 import { type UpdateInfo, checkLatestVersion } from "../version.ts"
 import { CenterTabStrip } from "./component/center-tab-strip"
-import { CreatePRButton } from "./component/create-pr-button"
 import { HelpDialog } from "./component/help-dialog"
 import { NewTaskDialog } from "./component/new-task-dialog"
+import { PaneHeader } from "./component/pane-header"
 import { RenameTaskDialog } from "./component/rename-task-dialog"
 import { ResizableEdge } from "./component/resizable-edge"
-import { UpdateDialog } from "./component/update-dialog"
+import { StatusBar } from "./component/status-bar"
+import { TopBar } from "./component/top-bar"
 import { CommandPaletteProvider } from "./context/command-palette"
 import { FocusProvider, type PaneId, useFocus } from "./context/focus"
-import { KobeKeymap, useCtrlCArmed, useKobeKeybindings } from "./context/keybindings"
+import { useKobeKeybindings } from "./context/keybindings"
 import { KVProvider, useKV } from "./context/kv"
 import { SyncProvider } from "./context/sync"
 import { FOCUS_ACCENT_SLOTS, type FocusAccentSlot, ThemeProvider, addTheme, useTheme } from "./context/theme"
@@ -219,212 +218,9 @@ export type AppDeps = {
   orchestrator: KobeOrchestrator
 }
 
-/* --------------------------------------------------------------------- */
-/*  PaneHeader — uniform CAPS-bold pane label (agent-deck-style chunking)  */
-/* --------------------------------------------------------------------- */
-function PaneHeader(props: {
-  title: string
-  subtitle?: string
-  /** Far-right hint (e.g. context %). Shown after `subtitle` when both exist. */
-  asideRight?: string
-  focused?: boolean
-  ordinal?: string | number
-}) {
-  const { theme } = useTheme()
-  // Focused panes paint in `theme.focusAccent` — a user-controllable
-  // slot (Settings → General → Focus accent) that resolves to one of
-  // primary / success / info. Default is primary (terracotta under
-  // Claude's palette), which doubles as the brand hue. The leading
-  // `▌` block character is the visibility hammer the prior bold-only
-  // title was missing — it attaches the focus signal to the title
-  // visually so the user's eye doesn't scan the whole screen to pick
-  // up the active pane.
-  const focused = () => props.focused !== false
-  const titleColor = () => (focused() ? theme.focusAccent : theme.textMuted)
-  const hasRight = () => Boolean(props.subtitle) || Boolean(props.asideRight)
-  return (
-    <box
-      flexDirection="row"
-      justifyContent="space-between"
-      flexShrink={0}
-      // paddingTop=1 mirrors the Sidebar pane's outer paddingTop so
-      // all four pane titles sit at the same baseline row. The
-      // ordinal sits flush at the left edge (no ▌ marker, no extra
-      // gap) — earlier the `▌ <ord> <title>` shape with gap=1
-      // produced two cells of whitespace before the digit and the
-      // four markers visually drifted out of alignment by a column.
-      paddingTop={1}
-      paddingLeft={2}
-      paddingRight={2}
-    >
-      <box flexDirection="row" gap={1} flexShrink={1}>
-        {/* Ordinal flush left — plain BOLD; the focus-tracking color
-            (focusAccent vs textMuted) is what flags this digit as the
-            ctrl+N chord target. The underline variant felt visually
-            noisy at title-row scale. */}
-        <Show when={props.ordinal !== undefined}>
-          <text fg={titleColor()} attributes={TextAttributes.BOLD} wrapMode="none">
-            {props.ordinal}
-          </text>
-        </Show>
-        <text fg={titleColor()} attributes={TextAttributes.BOLD} wrapMode="none">
-          {props.title}
-        </text>
-      </box>
-      <Show when={hasRight()}>
-        <box flexDirection="row" gap={2} flexShrink={0}>
-          <Show when={props.subtitle}>
-            <text fg={theme.textMuted} wrapMode="none" flexShrink={1}>
-              {props.subtitle}
-            </text>
-          </Show>
-          <Show when={props.asideRight}>
-            <text fg={theme.textMuted} wrapMode="none">
-              {props.asideRight}
-            </text>
-          </Show>
-        </box>
-      </Show>
-    </box>
-  )
-}
-
-/**
- * `[Key]` chip — agent-deck-style key affordance. The key is wrapped in
- * literal brackets in BOLD accent color; label follows in muted text.
- * No filled background → terminal shows through.
- */
-function Hotkey(props: { keys: string; label: string }) {
-  const { theme } = useTheme()
-  return (
-    <box flexDirection="row" gap={1} flexShrink={0}>
-      <text fg={theme.accent} attributes={TextAttributes.BOLD} wrapMode="none">
-        [{props.keys}]
-      </text>
-      <text fg={theme.textMuted} wrapMode="none">
-        {props.label}
-      </text>
-    </box>
-  )
-}
-
-/**
- * Bottom status bar — agent-deck style. Left side: focused-pane label +
- * pane-local hotkeys. Right side: always-on global hotkeys. Reads the
- * focused pane from context so the parent doesn't need to thread it.
- */
-function StatusBar() {
-  const { theme } = useTheme()
-  const focus = useFocus()
-  const ctrlCArmed = useCtrlCArmed()
-  const sectionLabel = () => {
-    switch (focus.focused()) {
-      case "sidebar":
-        return "Tasks:"
-      case "workspace":
-        return "Chat:"
-      case "files":
-        return "Files:"
-      case "terminal":
-        return "Terminal:"
-    }
-  }
-  // Pane-local hints come from KobeKeymap by scope; only rows with a
-  // non-pinned `hint` and a `scope` matching the focused pane and a
-  // workspace-detach exception (esc detach is global but we want it to
-  // surface only while workspace is focused — sidebar already IS sidebar,
-  // files/terminal use it more rarely). The condition is simple: `hint
-  // && !pin && (scope === focused || (id === "focus.detach" && focused
-  // === "workspace"))`.
-  const leftHints = () =>
-    KobeKeymap.filter((b) => {
-      if (!b.hint || b.hint.pin) return false
-      if (b.scope === focus.focused()) return true
-      if (b.id === "focus.detach" && focus.focused() === "workspace") return true
-      return false
-    })
-  // Right column = anything pinned right; order preserved from KobeKeymap.
-  const rightHints = KobeKeymap.filter((b) => b.hint?.pin === "right")
-
-  return (
-    <box flexDirection="row" justifyContent="space-between" flexShrink={0} paddingLeft={1} paddingRight={1}>
-      {/* Left: section label + pane-local hotkeys (driven by KobeKeymap) */}
-      <box flexDirection="row" gap={2} flexShrink={1}>
-        <text fg={theme.primary} attributes={TextAttributes.BOLD} wrapMode="none">
-          {sectionLabel()}
-        </text>
-        <For each={leftHints()}>{(b) => <Hotkey keys={b.hint!.keys} label={b.hint!.label} />}</For>
-      </box>
-      {/* Right: global hotkeys (always available). Driven by KobeKeymap's
-          `pin: "right"` rows. When ctrl+c is armed for double-tap quit,
-          a warning chip is added so the user knows the next ctrl+c
-          will exit. (The real quit chord — sidebar `q` — surfaces in
-          the LEFT column when sidebar is focused, so the right column
-          is just for cross-pane reminders now.) */}
-      <box flexDirection="row" gap={2} flexShrink={0}>
-        <For each={rightHints}>{(b) => <Hotkey keys={b.hint!.keys} label={b.hint!.label} />}</For>
-        <Show when={ctrlCArmed()}>
-          <text fg={theme.warning} attributes={TextAttributes.BOLD} wrapMode="none">
-            Press Ctrl+C again to exit
-          </text>
-        </Show>
-      </box>
-    </box>
-  )
-}
-
-function TopBar(props: {
-  orchestrator: KobeOrchestrator
-  activeTask: Accessor<Task | undefined>
-  updateInfo: Accessor<UpdateInfo | null>
-}) {
-  const { theme } = useTheme()
-  const dialog = useDialog()
-  // Three columns of equal flex so the center sits at the geometric
-  // midpoint regardless of the left brand width or the right PR button
-  // width. Left = brand+version. Center = active task's branch (no
-  // "Repo <name>" prefix — kobe spans many repos so a single repo
-  // label in the topbar is misleading; the active branch alone is the
-  // useful per-task signal). Right = PR action.
-  return (
-    <box flexDirection="row" paddingLeft={2} paddingRight={2} flexShrink={0}>
-      <box flexDirection="row" flexGrow={1} flexShrink={1} flexBasis={0} gap={1} justifyContent="flex-start">
-        <text fg={theme.primary} attributes={TextAttributes.BOLD}>
-          KobeCode
-        </text>
-        <text fg={theme.textMuted}>v{pkg.version}</text>
-        {/* Update chip — clickable: opens the UpdateDialog with the
-            install command and the GitHub release notes for what's new.
-            Only renders when the npm-registry check found a newer
-            published version. Informational only — no auto-update.
-            Suppressed entirely in dev mode (KOBE_DEV=1, set by
-            `bun run dev`). */}
-        <Show when={props.updateInfo()?.hasUpdate}>
-          <text
-            fg={theme.warning}
-            attributes={TextAttributes.BOLD}
-            onMouseUp={() => {
-              const info = props.updateInfo()
-              if (info) UpdateDialog.show(dialog, info)
-            }}
-          >
-            ↑ v{props.updateInfo()?.latest} available
-          </text>
-        </Show>
-      </box>
-      <box flexDirection="row" flexGrow={1} flexShrink={1} flexBasis={0} gap={1} justifyContent="center">
-        <Show when={props.activeTask() !== undefined}>
-          <text fg={theme.text} attributes={TextAttributes.BOLD} wrapMode="none">
-            {props.activeTask()?.branch}
-          </text>
-        </Show>
-      </box>
-      <box flexDirection="row" flexGrow={1} flexShrink={1} flexBasis={0} justifyContent="flex-end">
-        <CreatePRButton orchestrator={props.orchestrator} activeTask={props.activeTask} />
-      </box>
-    </box>
-  )
-}
+// PaneHeader / StatusBar / TopBar moved to `./component/*.tsx` — they
+// are pure rendering and don't share state with Shell. The `Hotkey`
+// chip helper moved alongside StatusBar (it's only used there).
 
 function Shell(props: AppDeps) {
   const themeCtx = useTheme()
