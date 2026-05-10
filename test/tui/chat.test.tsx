@@ -22,6 +22,7 @@ import {
 } from "../../src/tui/panes/chat/edit-diff.ts"
 import {
   type ChatState,
+  SCROLLBACK_CAP,
   applyEvent,
   cleanChatText,
   createInitialState,
@@ -903,5 +904,156 @@ describe("capLines", () => {
     const collapsed = capLines(diff.removes, COLLAPSED_LINE_CAP)
     expect(collapsed.visible).toHaveLength(COLLAPSED_LINE_CAP)
     expect(collapsed.hidden).toBe(5)
+  })
+})
+
+/* --------------------------------------------------------------------- */
+/*  Bounded scrollback                                                    */
+/* --------------------------------------------------------------------- */
+
+/**
+ * The chat store keeps a per-tab `messages: ChatRow[]` array. Without a
+ * cap, a long-running streaming session would balloon RSS — the perf
+ * baseline (`docs/perf/baseline.md`) measured ~168 MB over a 1000-event
+ * burst. These tests pin the bound:
+ *
+ *   - `SCROLLBACK_CAP` is never exceeded after many appends.
+ *   - A single sentinel system row appears at index 0 once the cap is
+ *     crossed.
+ *   - Re-truncation coalesces — no stacked sentinels; the count bumps.
+ *   - The trailing assistant row that's mid-stream (coalescing via
+ *     `assistant.delta`) is preserved across truncations.
+ *   - History hydration with > cap rows yields a capped state with
+ *     the right sentinel.
+ */
+describe("bounded scrollback", () => {
+  // tool.start adds a fresh row each time → easiest way to push the
+  // array length up without triggering the assistant.delta coalesce
+  // path (which doesn't grow the array).
+  const fillToolStarts = (s: ChatState, n: number): ChatState => {
+    let cur = s
+    for (let i = 0; i < n; i++) {
+      cur = applyEvent(cur, { type: "tool.start", name: "Bash", input: { i } }, FIXED_TS)
+    }
+    return cur
+  }
+
+  test("never exceeds SCROLLBACK_CAP after many appends", () => {
+    const s = fillToolStarts(createInitialState(), SCROLLBACK_CAP * 3)
+    expect(s.messages.length).toBe(SCROLLBACK_CAP)
+  })
+
+  test("sentinel system row appears at index 0 once cap is exceeded", () => {
+    // Pushing CAP+5 rows drops 6 from the front: 5 overflow + 1 slot
+    // reserved for the sentinel itself (cap = sentinel + cap-1 content).
+    const s = fillToolStarts(createInitialState(), SCROLLBACK_CAP + 5)
+    const head = s.messages[0]
+    expect(head?.kind).toBe("system")
+    expect((head as { text: string }).text).toMatch(/scrollback truncated/)
+    expect((head as { text: string }).text).toMatch(/6 rows dropped/)
+  })
+
+  test("assistant.delta coalesce path doesn't grow the array, so doesn't trigger truncation", () => {
+    // Fill exactly to the cap with tool starts, then push a single
+    // assistant row. Subsequent deltas should merge into it without
+    // pushing the array over the cap.
+    let s = fillToolStarts(createInitialState(), SCROLLBACK_CAP - 1)
+    s = applyEvent(s, { type: "assistant.delta", text: "a" }, FIXED_TS)
+    expect(s.messages.length).toBe(SCROLLBACK_CAP)
+    s = applyEvent(s, { type: "assistant.delta", text: "b" }, FIXED_TS)
+    s = applyEvent(s, { type: "assistant.delta", text: "c" }, FIXED_TS)
+    // Length is unchanged — the delta merged into the trailing row.
+    expect(s.messages.length).toBe(SCROLLBACK_CAP)
+    const last = s.messages[s.messages.length - 1]
+    expect(last).toMatchObject({ kind: "assistant", text: "abc" })
+  })
+
+  test("sentinel coalesces across multiple truncations (count bumps, no stacking)", () => {
+    // First overflow: push CAP+10 → drops 11 (10 overflow + 1 sentinel slot).
+    let s = fillToolStarts(createInitialState(), SCROLLBACK_CAP + 10)
+    expect(s.messages.length).toBe(SCROLLBACK_CAP)
+    expect((s.messages[0] as { text: string }).text).toMatch(/11 rows dropped/)
+    // Push 20 more rows. Each push above the cap drops one front content
+    // row; the sentinel is preserved and its count bumps by 1 each time
+    // (the old sentinel slot itself is reused, not double-counted).
+    s = fillToolStarts(s, 20)
+    expect(s.messages.length).toBe(SCROLLBACK_CAP)
+    // Exactly one system row at the head; no second sentinel sneaked in.
+    const sentinelRows = s.messages.filter(
+      (r) => r.kind === "system" && /scrollback truncated/.test((r as { text: string }).text),
+    )
+    expect(sentinelRows).toHaveLength(1)
+    // 11 from the first overflow + 20 added rows that each evicted one
+    // content row = 31.
+    expect((s.messages[0] as { text: string }).text).toMatch(/31 rows dropped/)
+  })
+
+  test("mid-stream live assistant row is preserved across truncation", () => {
+    // Set up: push cap-1 tool starts, then start an assistant row.
+    // Now any further append bumps the array over the cap and triggers
+    // truncation — but the live tail (the assistant row) must survive
+    // because it's still being coalesced into.
+    let s = fillToolStarts(createInitialState(), SCROLLBACK_CAP - 1)
+    s = applyEvent(s, { type: "assistant.delta", text: "live-" }, FIXED_TS)
+    expect(s.messages.length).toBe(SCROLLBACK_CAP)
+    const liveBefore = s.messages[s.messages.length - 1]
+    expect(liveBefore).toMatchObject({ kind: "assistant" })
+    // Coalesce more deltas — confirms the live row stays put.
+    s = applyEvent(s, { type: "assistant.delta", text: "still-" }, FIXED_TS)
+    s = applyEvent(s, { type: "assistant.delta", text: "alive" }, FIXED_TS)
+    const liveAfter = s.messages[s.messages.length - 1]
+    expect(liveAfter).toMatchObject({ kind: "assistant", text: "live-still-alive" })
+    // Now push another *new* row to force a truncation. The previous
+    // live assistant is no longer at the tail — but it survives because
+    // we drop from the front, never the tail.
+    s = applyEvent(s, { type: "tool.start", name: "Bash", input: 99 }, FIXED_TS)
+    expect(s.messages.length).toBe(SCROLLBACK_CAP)
+    // The assistant row containing "live-still-alive" is still present
+    // (not dropped from the front of the cap window).
+    const survived = s.messages.find(
+      (r) => r.kind === "assistant" && (r as { text: string }).text === "live-still-alive",
+    )
+    expect(survived).toBeDefined()
+  })
+
+  test("setMessagesFromHistory caps a > cap history with the right sentinel", () => {
+    // Build cap+25 trivial messages and hydrate.
+    const past: Message[] = Array.from({ length: SCROLLBACK_CAP + 25 }, (_, i) => ({
+      role: "user",
+      content: `m${i}`,
+      timestamp: FIXED_TS,
+      sessionId: "s",
+    }))
+    const s = setMessagesFromHistory(createInitialState(), past)
+    expect(s.messages.length).toBe(SCROLLBACK_CAP)
+    const head = s.messages[0]
+    expect(head?.kind).toBe("system")
+    // CAP+25 in → drops 26 (25 overflow + 1 sentinel slot).
+    expect((head as { text: string }).text).toMatch(/26 rows dropped/)
+    // The most recent rows survived (we keep the tail of history).
+    const last = s.messages[s.messages.length - 1]
+    expect(last).toMatchObject({ kind: "user", text: `m${SCROLLBACK_CAP + 25 - 1}` })
+  })
+
+  test("under-cap appends do not insert a sentinel", () => {
+    const s = fillToolStarts(createInitialState(), SCROLLBACK_CAP - 5)
+    expect(s.messages.length).toBe(SCROLLBACK_CAP - 5)
+    // No system rows synthesized.
+    expect(s.messages.filter((r) => r.kind === "system")).toHaveLength(0)
+  })
+
+  test("pushUser respects the cap", () => {
+    let s = fillToolStarts(createInitialState(), SCROLLBACK_CAP)
+    s = pushUser(s, "new prompt", FIXED_TS)
+    expect(s.messages.length).toBe(SCROLLBACK_CAP)
+    // Newest user prompt survives at the tail.
+    expect(s.messages[s.messages.length - 1]).toMatchObject({ kind: "user", text: "new prompt" })
+  })
+
+  test("pushSystemError respects the cap", () => {
+    let s = fillToolStarts(createInitialState(), SCROLLBACK_CAP)
+    s = pushSystemError(s, "boom", FIXED_TS)
+    expect(s.messages.length).toBe(SCROLLBACK_CAP)
+    expect(s.messages[s.messages.length - 1]).toMatchObject({ kind: "system" })
   })
 })
