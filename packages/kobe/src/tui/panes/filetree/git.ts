@@ -49,6 +49,20 @@ export type StatusEntry = {
   path: string
   /** Single-char status indicator (see {@link FileStatus}). */
   status: FileStatus
+  /** Lines added vs HEAD. `null` for binary or unknown (untracked
+   * counted via wc, see {@link statusFiles}). */
+  added?: number | null
+  /** Lines deleted vs HEAD. `null` for binary or unknown. */
+  deleted?: number | null
+}
+
+/** A row from `git diff HEAD --numstat`. */
+export type NumstatEntry = {
+  path: string
+  /** `null` for binary files (git emits `-`). */
+  added: number | null
+  /** `null` for binary files (git emits `-`). */
+  deleted: number | null
 }
 
 /**
@@ -116,7 +130,126 @@ export async function listFiles(worktreePath: string): Promise<string[]> {
  */
 export async function statusFiles(worktreePath: string): Promise<StatusEntry[]> {
   const out = runGit(["status", "--porcelain"], worktreePath)
-  return parsePorcelain(out)
+  const entries = parsePorcelain(out)
+  // Merge in `git diff HEAD --numstat` so each row carries +/- counts.
+  // Untracked files don't appear in `git diff` output — for those we
+  // count line counts on disk so the user still sees how many lines
+  // were added. Failures fall through silently: the pane already
+  // handles missing stats by rendering blanks.
+  let stats: Map<string, { added: number | null; deleted: number | null }> | null = null
+  try {
+    const diffOut = runGit(["diff", "--no-color", "--numstat", "HEAD"], worktreePath)
+    stats = new Map(parseNumstat(diffOut).map((n) => [n.path, { added: n.added, deleted: n.deleted }]))
+  } catch {
+    // No HEAD yet (initial commit), or other diff failure — skip
+    // stats rather than failing the whole list.
+    stats = new Map()
+  }
+  return entries.map((e) => {
+    const s = stats?.get(e.path)
+    if (s) return { ...e, added: s.added, deleted: s.deleted }
+    return e
+  })
+}
+
+/**
+ * Run `git diff HEAD --numstat` and parse into structured stats.
+ * Useful as a primitive for callers that want raw numstat without the
+ * porcelain status. Throws on non-zero exit (caller can wrap to soften).
+ */
+export async function numstatFiles(worktreePath: string): Promise<NumstatEntry[]> {
+  const out = runGit(["diff", "--no-color", "--numstat", "HEAD"], worktreePath)
+  return parseNumstat(out)
+}
+
+/**
+ * Pure parser for `git diff --numstat` output. Each line is:
+ *   `<added>\t<deleted>\t<path>`
+ * Binary files use `-\t-\tpath` — we surface those as `null` counts.
+ * Renames look like `<a>\t<d>\told -> new` (or with `{}` braces depending
+ * on git config); we keep the raw path text because the porcelain status
+ * row carries the canonical post-rename path already.
+ */
+export function parseNumstat(raw: string): NumstatEntry[] {
+  const lines = raw.split("\n").map((l) => l.replace(/\r$/, ""))
+  const out: NumstatEntry[] = []
+  for (const line of lines) {
+    if (line.length === 0) continue
+    const tab1 = line.indexOf("\t")
+    if (tab1 < 0) continue
+    const tab2 = line.indexOf("\t", tab1 + 1)
+    if (tab2 < 0) continue
+    const a = line.slice(0, tab1)
+    const d = line.slice(tab1 + 1, tab2)
+    let path = line.slice(tab2 + 1)
+    // Rename forms: "old -> new" or "{old => new}".
+    const arrow = path.indexOf(" -> ")
+    if (arrow >= 0) path = path.slice(arrow + " -> ".length)
+    const added = a === "-" ? null : Number.parseInt(a, 10)
+    const deleted = d === "-" ? null : Number.parseInt(d, 10)
+    if (path.length === 0) continue
+    out.push({
+      path,
+      added: Number.isNaN(added as number) ? null : added,
+      deleted: Number.isNaN(deleted as number) ? null : deleted,
+    })
+  }
+  return out
+}
+
+/**
+ * Build a directory tree from a flat list of paths. Used by the All
+ * tab to render files grouped by their on-disk hierarchy. The returned
+ * root has an empty name/path; its children are the top-level entries
+ * sorted with directories first, then files, alphabetically within each
+ * group (matches VS Code / Finder default).
+ */
+export type TreeNode = {
+  /** Path segment (last component). Empty for the root. */
+  name: string
+  /** Full path relative to worktree root. Empty for the root. */
+  path: string
+  /** Directories vs leaves. Directories may have empty `children` if
+   * a file under them is filtered out — but `buildTree` never produces
+   * empty dirs since paths terminate at files. */
+  isDir: boolean
+  children: TreeNode[]
+}
+
+export function buildTree(paths: readonly string[]): TreeNode {
+  const root: TreeNode = { name: "", path: "", isDir: true, children: [] }
+  for (const p of paths) {
+    if (!p) continue
+    const segs = p.split("/").filter((s) => s.length > 0)
+    if (segs.length === 0) continue
+    let cur = root
+    for (let i = 0; i < segs.length; i++) {
+      const seg = segs[i] as string
+      const isLast = i === segs.length - 1
+      const isDir = !isLast
+      let child = cur.children.find((c) => c.name === seg && c.isDir === isDir)
+      if (!child) {
+        child = {
+          name: seg,
+          path: segs.slice(0, i + 1).join("/"),
+          isDir,
+          children: [],
+        }
+        cur.children.push(child)
+      }
+      cur = child
+    }
+  }
+  sortTree(root)
+  return root
+}
+
+function sortTree(node: TreeNode): void {
+  node.children.sort((a, b) => {
+    if (a.isDir !== b.isDir) return a.isDir ? -1 : 1
+    return a.name.localeCompare(b.name)
+  })
+  for (const c of node.children) sortTree(c)
 }
 
 /**

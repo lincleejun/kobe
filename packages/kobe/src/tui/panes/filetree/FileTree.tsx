@@ -60,7 +60,7 @@
 import { TextAttributes } from "@opentui/core"
 import { type Accessor, For, Show, createEffect, createMemo, createSignal, on } from "solid-js"
 import { useTheme } from "../../context/theme"
-import { type FileStatus, type StatusEntry, listFiles, statusFiles } from "./git"
+import { type FileStatus, type StatusEntry, type TreeNode, buildTree, listFiles, statusFiles } from "./git"
 import { type FileTreeTab, useFileTreeBindings } from "./keys"
 
 /**
@@ -98,11 +98,20 @@ export type FileTreeProps = {
 }
 
 /**
- * Internal row shape. `All` rows carry just a path; `Changes` rows
- * carry a status code too. Tabs render their own row variant; we use
- * a discriminated union to keep the cursor logic uniform.
+ * Internal row shape. The All tab renders a tree (files + collapsible
+ * directories with `depth` for indentation). The Changes tab renders a
+ * flat list of status rows carrying +/- diff stats.
  */
-type Row = { kind: "file"; path: string } | { kind: "status"; path: string; status: FileStatus }
+type Row =
+  | { kind: "file"; path: string; name: string; depth: number }
+  | { kind: "dir"; path: string; name: string; depth: number; expanded: boolean; hasChildren: boolean }
+  | {
+      kind: "status"
+      path: string
+      status: FileStatus
+      added: number | null | undefined
+      deleted: number | null | undefined
+    }
 
 /**
  * Map a status code to its theme token. Resolved at render time so a
@@ -177,6 +186,10 @@ export function FileTree(props: FileTreeProps) {
   const [allFiles, setAllFiles] = createSignal<string[] | null>(null)
   const [changes, setChanges] = createSignal<StatusEntry[] | null>(null)
   const [error, setError] = createSignal<string | null>(null)
+  // Set of expanded directory paths (relative to worktree root). The
+  // tree renders top-level entries always; deeper levels show only
+  // when their parent is in the set. Reset on worktree change.
+  const [expandedDirs, setExpandedDirs] = createSignal<ReadonlySet<string>>(new Set())
 
   /**
    * Fetch the data for the current tab. Errors land in `error()` and
@@ -216,6 +229,7 @@ export function FileTree(props: FileTreeProps) {
       setChanges(null)
       setError(null)
       setCursorIndex(0)
+      setExpandedDirs(new Set<string>())
       await refetch(tab(), path)
     }),
   )
@@ -244,17 +258,53 @@ export function FileTree(props: FileTreeProps) {
     }),
   )
 
+  // Tree built once per `allFiles` change and reused while expansion
+  // state mutates — flattening below is O(visible-rows), which is
+  // ~hundreds in practice and runs only when `expandedDirs` changes.
+  const tree = createMemo<TreeNode | null>(() => {
+    const files = allFiles()
+    if (files == null) return null
+    return buildTree(files)
+  })
+
+  function flattenTree(node: TreeNode, expanded: ReadonlySet<string>, depth: number, out: Row[]): void {
+    for (const child of node.children) {
+      if (child.isDir) {
+        const isOpen = expanded.has(child.path)
+        out.push({
+          kind: "dir",
+          path: child.path,
+          name: child.name,
+          depth,
+          expanded: isOpen,
+          hasChildren: child.children.length > 0,
+        })
+        if (isOpen) flattenTree(child, expanded, depth + 1, out)
+      } else {
+        out.push({ kind: "file", path: child.path, name: child.name, depth })
+      }
+    }
+  }
+
   // ---------- derived rows ----------
   const rows = createMemo<Row[]>(() => {
     if (tab() === "all") {
-      const files = allFiles()
-      if (files == null) return []
-      return files.map((p) => ({ kind: "file" as const, path: p }))
+      const root = tree()
+      if (root == null) return []
+      const out: Row[] = []
+      flattenTree(root, expandedDirs(), 0, out)
+      return out
     }
     if (tab() === "changes") {
       const list = changes()
       if (list == null) return []
-      return list.map((e) => ({ kind: "status" as const, path: e.path, status: e.status }))
+      return list.map((e) => ({
+        kind: "status" as const,
+        path: e.path,
+        status: e.status,
+        added: e.added,
+        deleted: e.deleted,
+      }))
     }
     // checks tab — no rows in v1
     return []
@@ -270,12 +320,76 @@ export function FileTree(props: FileTreeProps) {
     if (rows().length === 0) return
     setCursorIndex(Math.max(cursorIndex() - 1, 0))
   }
+
+  /** `l` — hierarchy navigation only. On a closed dir, expand it; on
+   * an open dir, step into its first child; on a file, no-op (use
+   * `enter` to open). Keeping `l` purely structural lets the user roam
+   * through the tree without accidentally pulling the file into the
+   * preview pane. */
+  function expandOrDescend(): void {
+    const r = rows()
+    const i = cursorIndex()
+    const row = r[i]
+    if (!row) return
+    if (row.kind !== "dir") return
+    if (!row.expanded && row.hasChildren) {
+      setExpandedDirs((prev) => {
+        const next = new Set(prev)
+        next.add(row.path)
+        return next
+      })
+    } else if (row.expanded) {
+      if (i + 1 < r.length) setCursorIndex(i + 1)
+    }
+  }
+
+  /** `h` — collapse current directory, or jump to parent. Behavior on
+   * the All tab; no-op elsewhere. */
+  function collapseOrParent(): void {
+    if (tab() !== "all") return
+    const r = rows()
+    const i = cursorIndex()
+    const row = r[i]
+    if (!row) return
+    // Open dir → collapse.
+    if (row.kind === "dir" && row.expanded) {
+      setExpandedDirs((prev) => {
+        const next = new Set(prev)
+        next.delete(row.path)
+        return next
+      })
+      return
+    }
+    // Otherwise jump to parent dir (depth - 1) walking upward in rows.
+    if (row.kind !== "dir" && row.kind !== "file") return
+    const targetDepth = row.depth - 1
+    if (targetDepth < 0) return
+    for (let j = i - 1; j >= 0; j--) {
+      const candidate = r[j]
+      if (!candidate) continue
+      if (candidate.kind === "dir" && candidate.depth === targetDepth) {
+        setCursorIndex(j)
+        return
+      }
+    }
+  }
+
   function openCurrent(): void {
     const r = rows()
     const i = cursorIndex()
     if (i < 0 || i >= r.length) return
     const row = r[i]
     if (!row) return
+    if (row.kind === "dir") {
+      // Toggle expansion on enter for directory rows.
+      setExpandedDirs((prev) => {
+        const next = new Set(prev)
+        if (next.has(row.path)) next.delete(row.path)
+        else next.add(row.path)
+        return next
+      })
+      return
+    }
     props.onOpenFile(row.path)
   }
   function refresh(): void {
@@ -290,6 +404,8 @@ export function FileTree(props: FileTreeProps) {
     currentTab: tab,
     openCurrent,
     refresh,
+    expandOrDescend,
+    collapseOrParent,
   })
 
   // ---------- render ----------
@@ -369,7 +485,38 @@ export function FileTree(props: FileTreeProps) {
             <For each={rows()}>
               {(row, index) => {
                 const isCursor = () => index() === cursorIndex()
+                if (row.kind === "dir") {
+                  // Indent: 2 cells per depth level. Marker: ▾ open, ▸ closed.
+                  const indent = "  ".repeat(row.depth)
+                  const marker = row.expanded ? "▾" : "▸"
+                  return (
+                    <box
+                      paddingLeft={1}
+                      paddingRight={1}
+                      backgroundColor={isCursor() ? theme.primary : undefined}
+                      onMouseUp={() => {
+                        setCursorIndex(index())
+                        setExpandedDirs((prev) => {
+                          const next = new Set(prev)
+                          if (next.has(row.path)) next.delete(row.path)
+                          else next.add(row.path)
+                          return next
+                        })
+                      }}
+                    >
+                      <text
+                        fg={isCursor() ? theme.selectedListItemText : theme.textMuted}
+                        attributes={TextAttributes.BOLD}
+                        wrapMode="none"
+                      >
+                        {`${indent}${marker} ${row.name}/`}
+                      </text>
+                    </box>
+                  )
+                }
                 if (row.kind === "file") {
+                  const indent = "  ".repeat(row.depth)
+                  // Two-cell gutter where the dir marker would sit.
                   return (
                     <box
                       paddingLeft={1}
@@ -381,12 +528,12 @@ export function FileTree(props: FileTreeProps) {
                       }}
                     >
                       <text fg={isCursor() ? theme.selectedListItemText : theme.text} wrapMode="none">
-                        {row.path}
+                        {`${indent}  ${row.name}`}
                       </text>
                     </box>
                   )
                 }
-                // Changes row: status char + path.
+                // Changes row: status char + path + +N -N stats.
                 const tone = statusToken(row.status)
                 const statusColor = () => {
                   switch (tone) {
@@ -402,6 +549,8 @@ export function FileTree(props: FileTreeProps) {
                       return theme.textMuted
                   }
                 }
+                const addedText = row.added == null ? "" : `+${row.added}`
+                const deletedText = row.deleted == null ? "" : `-${row.deleted}`
                 return (
                   <box
                     flexDirection="row"
@@ -417,9 +566,19 @@ export function FileTree(props: FileTreeProps) {
                     <text fg={isCursor() ? theme.selectedListItemText : statusColor()} wrapMode="none">
                       {row.status}
                     </text>
-                    <text fg={isCursor() ? theme.selectedListItemText : theme.text} wrapMode="none">
+                    <text fg={isCursor() ? theme.selectedListItemText : theme.text} wrapMode="none" flexGrow={1}>
                       {row.path}
                     </text>
+                    <Show when={addedText.length > 0}>
+                      <text fg={isCursor() ? theme.selectedListItemText : theme.success} wrapMode="none">
+                        {addedText}
+                      </text>
+                    </Show>
+                    <Show when={deletedText.length > 0}>
+                      <text fg={isCursor() ? theme.selectedListItemText : theme.error} wrapMode="none">
+                        {deletedText}
+                      </text>
+                    </Show>
                   </box>
                 )
               }}

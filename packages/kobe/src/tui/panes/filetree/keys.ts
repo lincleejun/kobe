@@ -54,6 +54,10 @@ export type FileTreeBindingsOpts = {
   openCurrent: () => void
   /** Force a reload of the current tab's data. */
   refresh: () => void
+  /** `l` — expand current dir / descend into it / open file. */
+  expandOrDescend: () => void
+  /** `h` — collapse current dir or jump to parent. */
+  collapseOrParent: () => void
 }
 
 /**
@@ -68,6 +72,10 @@ export function useFileTreeBindings(opts: FileTreeBindingsOpts): void {
       "files.nav": (evt) => {
         if (evt.name === "j" || evt.name === "down") opts.moveDown()
         else if (evt.name === "k" || evt.name === "up") opts.moveUp()
+      },
+      "files.hierarchy": (evt) => {
+        if (evt.name === "l" || evt.name === "right") opts.expandOrDescend()
+        else if (evt.name === "h" || evt.name === "left") opts.collapseOrParent()
       },
       "files.tab": (evt) => {
         const cur = opts.currentTab()

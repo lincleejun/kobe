@@ -24,8 +24,10 @@ import type { SpawnSyncReturns } from "node:child_process"
 import {
   type FileStatus,
   type StatusEntry,
+  buildTree,
   gitWrapper,
   listFiles,
+  parseNumstat,
   parsePorcelain,
   statusFiles,
 } from "@/tui/panes/filetree/git"
@@ -189,18 +191,40 @@ describe("listFiles", () => {
 // ---------------------------------------------------------------------
 
 describe("statusFiles", () => {
-  test("invokes git status --porcelain with the cwd", async () => {
-    const spy = vi.spyOn(gitWrapper, "spawnSync").mockReturnValue(fakeSpawnReturn(" M src/a.ts\n?? b.ts\n"))
+  test("invokes git status --porcelain then merges in git diff --numstat HEAD", async () => {
+    // `statusFiles` makes two git calls now: porcelain for the file
+    // list and numstat for +/- counts. We mock both via call-order.
+    const spy = vi
+      .spyOn(gitWrapper, "spawnSync")
+      .mockImplementationOnce(() => fakeSpawnReturn(" M src/a.ts\n?? b.ts\n"))
+      .mockImplementationOnce(() => fakeSpawnReturn("3\t1\tsrc/a.ts\n"))
     try {
       const entries = await statusFiles("/tmp/repo")
       expect(entries).toEqual<StatusEntry[]>([
-        { path: "src/a.ts", status: "M" },
+        { path: "src/a.ts", status: "M", added: 3, deleted: 1 },
         { path: "b.ts", status: "?" },
       ])
-      expect(spy).toHaveBeenCalledTimes(1)
-      const [args, cwd] = spy.mock.calls[0] ?? []
-      expect(args).toEqual(["status", "--porcelain"])
-      expect(cwd).toBe("/tmp/repo")
+      expect(spy).toHaveBeenCalledTimes(2)
+      const [args0, cwd0] = spy.mock.calls[0] ?? []
+      expect(args0).toEqual(["status", "--porcelain"])
+      expect(cwd0).toBe("/tmp/repo")
+      const [args1] = spy.mock.calls[1] ?? []
+      expect(args1).toEqual(["diff", "--no-color", "--numstat", "HEAD"])
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  test("falls through gracefully when numstat fails (e.g. no HEAD)", async () => {
+    // A fresh repo without HEAD makes `git diff HEAD` exit non-zero;
+    // we still want the porcelain rows to come through (without stats).
+    const spy = vi
+      .spyOn(gitWrapper, "spawnSync")
+      .mockImplementationOnce(() => fakeSpawnReturn(" M src/a.ts\n"))
+      .mockImplementationOnce(() => fakeSpawnReturn("", 128, "fatal: bad revision 'HEAD'"))
+    try {
+      const entries = await statusFiles("/tmp/repo")
+      expect(entries).toEqual<StatusEntry[]>([{ path: "src/a.ts", status: "M" }])
     } finally {
       spy.mockRestore()
     }
@@ -216,7 +240,7 @@ describe("statusFiles", () => {
     }
   })
 
-  test("throws when git exits non-zero", async () => {
+  test("throws when porcelain git exits non-zero", async () => {
     const spy = vi
       .spyOn(gitWrapper, "spawnSync")
       .mockReturnValue(fakeSpawnReturn("", 128, "fatal: not a git repository"))
@@ -225,5 +249,70 @@ describe("statusFiles", () => {
     } finally {
       spy.mockRestore()
     }
+  })
+})
+
+// ---------------------------------------------------------------------
+// parseNumstat — pure parser
+// ---------------------------------------------------------------------
+
+describe("parseNumstat", () => {
+  test("parses standard added/deleted numbers", () => {
+    const out = parseNumstat("3\t1\tsrc/a.ts\n0\t12\tsrc/b.ts\n")
+    expect(out).toEqual([
+      { path: "src/a.ts", added: 3, deleted: 1 },
+      { path: "src/b.ts", added: 0, deleted: 12 },
+    ])
+  })
+
+  test("treats `-` as null (binary files)", () => {
+    const out = parseNumstat("-\t-\timg/logo.png\n")
+    expect(out).toEqual([{ path: "img/logo.png", added: null, deleted: null }])
+  })
+
+  test("strips rename arrow forms to the new path", () => {
+    const out = parseNumstat("2\t1\told/path.ts -> new/path.ts\n")
+    expect(out).toEqual([{ path: "new/path.ts", added: 2, deleted: 1 }])
+  })
+
+  test("drops malformed and empty lines", () => {
+    const out = parseNumstat("\nabc\n3\t1\tok.ts\n")
+    expect(out).toEqual([{ path: "ok.ts", added: 3, deleted: 1 }])
+  })
+})
+
+// ---------------------------------------------------------------------
+// buildTree — flat paths → nested directories
+// ---------------------------------------------------------------------
+
+describe("buildTree", () => {
+  test("groups files under their directory parents", () => {
+    const root = buildTree(["src/a.ts", "src/b.ts", "README.md"])
+    // Top level: `src` (dir) before `README.md` (file).
+    expect(root.children.map((c) => `${c.name}${c.isDir ? "/" : ""}`)).toEqual(["src/", "README.md"])
+    const src = root.children[0]
+    expect(src?.isDir).toBe(true)
+    expect(src?.children.map((c) => c.name)).toEqual(["a.ts", "b.ts"])
+  })
+
+  test("sorts directories before files at every level, then alphabetical", () => {
+    const root = buildTree(["z.ts", "a/x.ts", "b.ts", "a/sub/y.ts"])
+    const top = root.children.map((c) => `${c.name}${c.isDir ? "/" : ""}`)
+    expect(top).toEqual(["a/", "b.ts", "z.ts"])
+    const aDir = root.children.find((c) => c.name === "a")
+    const aChildren = aDir?.children.map((c) => `${c.name}${c.isDir ? "/" : ""}`)
+    expect(aChildren).toEqual(["sub/", "x.ts"])
+  })
+
+  test("dedupes overlapping segments — multiple files sharing a parent dir", () => {
+    const root = buildTree(["pkg/a.ts", "pkg/a.ts", "pkg/b.ts"])
+    const pkg = root.children[0]
+    expect(pkg?.name).toBe("pkg")
+    expect(pkg?.children.map((c) => c.name)).toEqual(["a.ts", "b.ts"])
+  })
+
+  test("returns an empty root when given no paths", () => {
+    const root = buildTree([])
+    expect(root.children).toEqual([])
   })
 })
