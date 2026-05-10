@@ -40,16 +40,15 @@ import { CreatePRButton } from "./component/create-pr-button"
 import { HelpDialog } from "./component/help-dialog"
 import { NewTaskDialog, stripNewlines } from "./component/new-task-dialog"
 import { ResizableEdge } from "./component/resizable-edge"
-import { SettingsDialog } from "./component/settings-dialog"
 import { UpdateDialog } from "./component/update-dialog"
 import { CommandPaletteProvider } from "./context/command-palette"
 import { FocusProvider, type PaneId, useFocus } from "./context/focus"
-import { KobeKeymap, bindByIds, useCtrlCArmed, useKobeKeybindings } from "./context/keybindings"
+import { KobeKeymap, useCtrlCArmed, useKobeKeybindings } from "./context/keybindings"
 import { KVProvider, useKV } from "./context/kv"
 import { SyncProvider } from "./context/sync"
 import { FOCUS_ACCENT_SLOTS, type FocusAccentSlot, ThemeProvider, addTheme, useTheme } from "./context/theme"
 import { loadUserThemes } from "./context/theme/loader"
-import { useBindings } from "./lib/keymap"
+import { useAppKeymap } from "./app-keymap"
 import { Chat } from "./panes/chat/Chat"
 import { FileTree } from "./panes/filetree"
 import { Preview, type PreviewApi } from "./panes/preview"
@@ -743,15 +742,6 @@ function Shell(props: AppDeps) {
     k: "files",
     l: "terminal",
   }
-  useBindings(() => ({
-    enabled: dialog.stack.length === 0,
-    bindings: bindByIds({
-      "focus.numeric": (evt) => {
-        const target = FOCUS_HJKL_TARGETS[evt.name ?? ""]
-        if (target) setFocusedPane(target)
-      },
-    }),
-  }))
 
   // Keyboard resize for the focused pane — fallback when mouse drag
   // misfires on the splitter. ctrl+= / ctrl++ grows, ctrl+- / ctrl+_
@@ -780,13 +770,9 @@ function Shell(props: AppDeps) {
         return
     }
   }
-  useBindings(() => ({
-    enabled: dialog.stack.length === 0,
-    bindings: bindByIds({
-      "pane.resize-grow": () => nudgeFocusedPane(RESIZE_STEP),
-      "pane.resize-shrink": () => nudgeFocusedPane(-RESIZE_STEP),
-    }),
-  }))
+  // Note: the actual `useBindings(...)` calls for focus.numeric and
+  // pane.resize live in `useAppKeymap(...)` below — see app-keymap.tsx
+  // for the full priority stack.
 
   // Tab / shift+tab pane cycling is registered via `useKobeKeybindings`'s
   // onFocusNext / onFocusPrev callbacks below — we just gate them here
@@ -1101,85 +1087,24 @@ function Shell(props: AppDeps) {
     }
   }
 
-  // ctrl+q from the workspace (chat pane) jumps focus back to the
-  // ctrl+q jumps from workspace (chat) back to the sidebar.
-  // Workspace-scoped — this is the "trapped in the chat composer,
-  // want out" verb. Other panes use ctrl+1..4 / esc.
-  useBindings(() => ({
-    enabled: focusedPane() === "workspace" && dialog.stack.length === 0,
-    bindings: bindByIds({
-      "focus.sidebar": () => setFocusedPane("sidebar"),
-    }),
-  }))
-
-  // `n` (task.new), `q` (app.quit), `s` (settings) only fire when
-  // the SIDEBAR is focused — single-letter chords would otherwise
-  // collide with composer typing. Once on the sidebar, `n` opens
-  // the new-task dialog, `q` opens quit-confirm, `s` opens settings.
-  useBindings(() => ({
-    enabled: focusedPane() === "sidebar" && dialog.stack.length === 0,
-    bindings: bindByIds({
-      "task.new": () => {
-        void openNewTaskFlow()
-      },
-      "settings.open.sidebar": () => {
-        void SettingsDialog.show(dialog, kv, props.orchestrator)
-      },
-      "app.quit": () => {
-        DialogConfirm.show(dialog, "Quit kobe?", "Any in-progress tasks will be detached.", "stay").then((ok) => {
-          if (ok === true) {
-            try {
-              renderer?.destroy()
-            } catch (err) {
-              // eslint-disable-next-line no-console
-              console.error("kobe: renderer.destroy() failed during quit:", err)
-            }
-            process.exit(0)
-          }
-        })
-      },
-    }),
-  }))
-  // `ctrl+,` (settings.open) is a modifier chord — safe to leave
-  // global since it can't collide with typing.
-  useBindings(() => ({
-    enabled: dialog.stack.length === 0,
-    bindings: bindByIds({
-      "settings.open": () => {
-        void SettingsDialog.show(dialog, kv, props.orchestrator)
-      },
-    }),
-  }))
-
-  // Test-only hidden hotkey affordance for the W4.PR behavior test.
-  // Mouse-clicking the CreatePRButton from a PTY harness is awkward
-  // (opentui's mouse-event delivery needs SGR capability negotiation
-  // that the screen-capture path doesn't honor). When
-  // KOBE_TEST_PR_HOTKEY=1 we register a hidden ctrl+y binding that
-  // calls the same handler. We chose ctrl+y because (a) it's not in
-  // opentui's defaultTextareaKeyBindings (so the composer won't
-  // intercept it via preventDefault) and (b) kobe's keymap (see
-  // src/tui/lib/keymap.tsx) drops the shift modifier on single-letter
-  // keys, so chords like "ctrl+shift+p" never match anything emitted by
-  // node-pty. A second test path is the fake-engine HTTP server's POST
-  // /pr endpoint (see mountFakeEngineServer above) which bypasses the
-  // keymap entirely. Production never sets either env var.
-  useBindings(() => ({
-    enabled: process.env.KOBE_TEST_PR_HOTKEY === "1" && dialog.stack.length === 0,
-    bindings: [
-      {
-        key: "ctrl+y",
-        cmd: () => {
-          const task = activeTask()
-          if (!task || !task.worktreePath || task.status === "canceled") return
-          props.orchestrator.requestPR(task.id).catch((err: unknown) => {
-            // eslint-disable-next-line no-console
-            console.error("[kobe] requestPR failed:", err)
-          })
-        },
-      },
-    ],
-  }))
+  // Centralised keymap registration. All six top-level useBindings
+  // call sites used to live inline here; they were consolidated into
+  // app-keymap.tsx so the priority stack + scope rationale are
+  // visible in one place. See that file for the registration order
+  // and the rule about plain-letter vs modifier-prefixed chords.
+  useAppKeymap({
+    dialog,
+    focusedPane,
+    setFocusedPane,
+    nudgeFocusedPane,
+    resizeStep: RESIZE_STEP,
+    focusHjklTargets: FOCUS_HJKL_TARGETS,
+    openNewTaskFlow,
+    kv,
+    orchestrator: props.orchestrator,
+    renderer,
+    activeTask,
+  })
 
   // Side-channel PR trigger for the W4.PR behavior test. When
   // KOBE_TEST_FAKE_PORT is active, the fake-engine HTTP server (started
