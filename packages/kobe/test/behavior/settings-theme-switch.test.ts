@@ -7,14 +7,14 @@
  *      the sidebar) opens the SettingsDialog and the General section is
  *      active by default.
  *   2. The theme picker renders the bundled themes in alpha order
- *      (`conductor` first, default-active because src/tui/app.tsx sets
- *      `DEFAULT_THEME = "conductor"`).
+ *      (`claude` first, default-active because src/tui/app.tsx sets
+ *      `DEFAULT_THEME = "claude"`).
  *   3. Pressing ↓ + enter on the picker switches the active theme to
- *      `dracula` (the first non-default after the cold-boot cursor sits
+ *      `conductor` (the first non-default after the cold-boot cursor sits
  *      on the active row, then moves one step down).
  *   4. After closing the dialog, the KV store at
  *      `$HOME/.config/kobe/state.json` is rewritten with
- *      `activeTheme: "dracula"` — the most reliable proxy for "theme
+ *      `activeTheme: "conductor"` — the most reliable proxy for "theme
  *      actually applied" since the persistence effect in app.tsx only
  *      fires when `themeCtx.selected` changes.
  *
@@ -109,14 +109,14 @@ test("settings dialog → theme switch persists to KV", async () => {
   expect(flatDialog).toContain("Transparentbackground")
 
   // Bundled theme names sorted alphabetically (see SettingsDialog's
-  // `themeNames` memo). The visible list contains all six.
-  for (const name of ["conductor", "dracula", "nord", "opencode", "tokyonight"]) {
+  // `themeNames` memo). The visible list contains every bundled theme.
+  for (const name of ["claude", "conductor", "dracula", "nord", "opencode", "tokyonight"]) {
     expect(flatDialog).toContain(name)
   }
 
-  // The cursor starts on the currently-active theme (`conductor` —
+  // The cursor starts on the currently-active theme (`claude` —
   // app.tsx sets DEFAULT_THEME there). Press ↓ once to land on
-  // `dracula`, the next entry in alpha-sorted order.
+  // `conductor`, the next entry in alpha-sorted order.
   await kobe.sendKeys("\x1b[B") // arrow down
   // Apply the highlighted theme. The `return` binding in
   // settings-dialog.tsx calls `themeCtx.set(name)`.
@@ -142,7 +142,7 @@ test("settings dialog → theme switch persists to KV", async () => {
       try {
         const text = fs.readFileSync(statePath, "utf8")
         const parsed = JSON.parse(text) as { activeTheme?: unknown }
-        if (parsed && typeof parsed === "object" && parsed.activeTheme === "dracula") {
+        if (parsed && typeof parsed === "object" && parsed.activeTheme === "conductor") {
           persisted = parsed
           break
         }
@@ -153,7 +153,7 @@ test("settings dialog → theme switch persists to KV", async () => {
     await new Promise((r) => setTimeout(r, 100))
   }
   expect(persisted).not.toBeNull()
-  expect(persisted?.activeTheme).toBe("dracula")
+  expect(persisted?.activeTheme).toBe("conductor")
 
   await kobe.exit()
 }, 60_000)
