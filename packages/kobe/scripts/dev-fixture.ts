@@ -55,7 +55,7 @@ function main(): void {
   }
   if (existsSync(join(KOBE_DIR, "tasks.json")) && !reset) {
     console.log(`dev fixture already seeded at ${ROOT}`)
-    console.log(`  re-run with --reset to rebuild from scratch`)
+    console.log("  re-run with --reset to rebuild from scratch")
     printEnvHints()
     return
   }
@@ -70,7 +70,7 @@ function main(): void {
       "README.md": "# kobe-demo-alpha\n\nDemo repo seeded by dev-fixture.\n",
       "src/index.ts": "export const greet = (name: string) => `hi, ${name}`\n",
       "src/util.ts": "export const add = (a: number, b: number) => a + b\n",
-      "package.json": JSON.stringify({ name: "kobe-demo-alpha", version: "0.0.1" }, null, 2) + "\n",
+      "package.json": `${JSON.stringify({ name: "kobe-demo-alpha", version: "0.0.1" }, null, 2)}\n`,
     },
     dirty: {
       "src/index.ts": "export const greet = (name: string) => `hello, ${name}!`\n",
@@ -94,10 +94,7 @@ function main(): void {
   const wtInProgress = join(repoAlpha, ".claude/worktrees", wtInProgressId)
   const wtInReview = join(repoAlpha, ".claude/worktrees", wtInReviewId)
   gitWorktreeAdd(repoAlpha, wtInProgress, "kobe/feat/streaming-ui")
-  writeFileSync(
-    join(wtInProgress, "src/streaming.ts"),
-    "// scratch work in progress\nexport const stream = () => {}\n",
-  )
+  writeFileSync(join(wtInProgress, "src/streaming.ts"), "// scratch work in progress\nexport const stream = () => {}\n")
   // leave the file untracked so the file tree shows `?`
   gitWorktreeAdd(repoAlpha, wtInReview, "kobe/fix/sidebar-flicker")
   spawnSync("git", ["commit", "--allow-empty", "-m", "wip: smoothing flicker"], { cwd: wtInReview, stdio: "ignore" })
@@ -145,7 +142,7 @@ function main(): void {
       worktreePath: wtInProgress,
       kind: "task",
       sessionId: sid,
-      tabs: [{ id: tabId, sessionId: sid, createdAt: iso(-30) }],
+      tabs: [{ id: tabId, sessionId: sid, seq: 1, createdAt: iso(-30) }],
       activeTabId: tabId,
       status: "in_progress",
       archived: false,
@@ -180,7 +177,7 @@ function main(): void {
       worktreePath: wtInReview,
       kind: "task",
       sessionId: sid,
-      tabs: [{ id: tabId, sessionId: sid, createdAt: iso(-120) }],
+      tabs: [{ id: tabId, sessionId: sid, seq: 1, createdAt: iso(-120) }],
       activeTabId: tabId,
       status: "in_review",
       archived: false,
@@ -204,7 +201,7 @@ function main(): void {
       worktreePath: "",
       kind: "task",
       sessionId: null,
-      tabs: [{ id: tabId, sessionId: null, createdAt: iso(-5) }],
+      tabs: [{ id: tabId, sessionId: null, seq: 1, createdAt: iso(-5) }],
       activeTabId: tabId,
       status: "backlog",
       archived: false,
@@ -233,7 +230,7 @@ function main(): void {
       worktreePath: repoBeta, // pretend it landed back on main
       kind: "task",
       sessionId: sid,
-      tabs: [{ id: tabId, sessionId: sid, createdAt: iso(-60 * 24) }],
+      tabs: [{ id: tabId, sessionId: sid, seq: 1, createdAt: iso(-60 * 24) }],
       activeTabId: tabId,
       status: "done",
       archived: false,
@@ -254,7 +251,7 @@ function main(): void {
       worktreePath: "",
       kind: "task",
       sessionId: null,
-      tabs: [{ id: tabId, sessionId: null, createdAt: iso(-300) }],
+      tabs: [{ id: tabId, sessionId: null, seq: 1, createdAt: iso(-300) }],
       activeTabId: tabId,
       status: "error",
       archived: false,
@@ -283,7 +280,7 @@ function main(): void {
       worktreePath: repoAlpha,
       kind: "task",
       sessionId: sid,
-      tabs: [{ id: tabId, sessionId: sid, createdAt: iso(-60 * 24 * 14) }],
+      tabs: [{ id: tabId, sessionId: sid, seq: 1, createdAt: iso(-60 * 24 * 14) }],
       activeTabId: tabId,
       status: "done",
       archived: true,
@@ -304,7 +301,7 @@ function main(): void {
       worktreePath: "",
       kind: "task",
       sessionId: null,
-      tabs: [{ id: tabId, sessionId: null, createdAt: iso(-60 * 24 * 30) }],
+      tabs: [{ id: tabId, sessionId: null, seq: 1, createdAt: iso(-60 * 24 * 30) }],
       activeTabId: tabId,
       status: "canceled",
       archived: true,
@@ -343,8 +340,8 @@ function main(): void {
       kind: "task",
       sessionId: sid1,
       tabs: [
-        { id: tab1, sessionId: sid1, title: "argparse", createdAt: iso(-200) },
-        { id: tab2, sessionId: sid2, title: "click", createdAt: iso(-90) },
+        { id: tab1, sessionId: sid1, seq: 1, title: "argparse", createdAt: iso(-200) },
+        { id: tab2, sessionId: sid2, seq: 2, title: "click", createdAt: iso(-90) },
       ],
       activeTabId: tab2,
       status: "in_progress",
@@ -366,7 +363,7 @@ function main(): void {
       worktreePath: "",
       kind: "task",
       sessionId: null,
-      tabs: [{ id: tabId, sessionId: null, createdAt: iso(-10) }],
+      tabs: [{ id: tabId, sessionId: null, seq: 1, createdAt: iso(-10) }],
       activeTabId: tabId,
       status: "backlog",
       archived: false,
@@ -383,7 +380,7 @@ function main(): void {
   for (const [sessionId, { cwd, messages }] of sessions) {
     const dir = join(CLAUDE_PROJECTS, encodeCwd(cwd))
     mkdirSync(dir, { recursive: true })
-    const lines = messages.map((m) => JSON.stringify(m)).join("\n") + "\n"
+    const lines = `${messages.map((m) => JSON.stringify(m)).join("\n")}\n`
     writeFileSync(join(dir, `${sessionId}.jsonl`), lines, "utf8")
   }
 
@@ -396,7 +393,7 @@ function main(): void {
 
 function printEnvHints(): void {
   console.log("")
-  console.log("  KOBE_HOME_DIR=" + HOME)
+  console.log(`  KOBE_HOME_DIR=${HOME}`)
   console.log("  KOBE_TEST_ENGINE=dev-fake")
 }
 
@@ -455,7 +452,7 @@ function run(cmd: string[], cwd: string): void {
 function writeJsonAtomic(path: string, value: unknown): void {
   mkdirSync(dirname(path), { recursive: true })
   const tmp = `${path}.tmp`
-  writeFileSync(tmp, JSON.stringify(value, null, 2) + "\n", "utf8")
+  writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, "utf8")
   // node:fs renameSync — bun supports it
   spawnSync("mv", [tmp, path], { stdio: "ignore" })
 }
@@ -494,7 +491,7 @@ function mainTask(args: { repo: string; createdAt: string }): Task {
     worktreePath: args.repo,
     kind: "main",
     sessionId: null,
-    tabs: [{ id: tabId, sessionId: null, createdAt: args.createdAt }],
+    tabs: [{ id: tabId, sessionId: null, seq: 1, createdAt: args.createdAt }],
     activeTabId: tabId,
     status: "backlog",
     archived: false,
