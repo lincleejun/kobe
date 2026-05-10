@@ -210,9 +210,9 @@ archived; so can a `backlog` one. Archiving is non-destructive
 
 ### Concurrency cap
 
-We cap `in_progress` tasks at **4**
-([`CONCURRENCY_CAP`](../../packages/kobe/src/orchestrator/core.ts#L88)).
-The 5th `runTask` rejects with a typed `ConcurrencyCapError`; the UI
+We cap `in_progress` tasks at **20**
+([`CONCURRENCY_CAP`](../../packages/kobe/src/orchestrator/core.ts#L98)).
+The 21st `runTask` rejects with a typed `ConcurrencyCapError`; the UI
 surfaces the error and the user pauses something. Queueing is not in
 scope.
 
