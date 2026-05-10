@@ -1,11 +1,12 @@
 # Handoff — kobe (post-0.2.x polish wave)
 
 > Written 2026-05-10 at the end of a long polish session that shipped 0.2.0 → 0.2.1 → 0.2.2.
+> Last refreshed 2026-05-10 after the permission-mode revision (KOB-17) and the architecture dive that's awaiting Jackson's call.
 > Prior handoffs:
 >   - [`docs/HANDOFF-v1.md`](./docs/HANDOFF-v1.md) — Phase 0 mission + framing.
 >   - [`docs/HANDOFF-v2.md`](./docs/HANDOFF-v2.md) — Wave 3 → 4 transition (5-pane TUI shipped).
 >
-> THIS file: where the binary stands at v0.2.2, the research that drove the recent decisions, and what's open.
+> THIS file: where the binary stands at v0.2.2 (with one [Unreleased] CHANGELOG bullet pending the next cut), the research that drove the recent decisions, and what's open.
 
 ---
 
@@ -51,7 +52,7 @@ The five major user-visible additions since v0.1.x:
 2. **Pending approval/question pickers lifted into the composer slot** — ExitPlanMode and AskUserQuestion render as the bottom-of-chat input while pending; once submitted, the row drops back into the transcript as a resolved entry.
 3. **Settings dialog two-level keyboard nav** — sidebar level (j/k cycles General/Dev) vs body level (j/k cycles theme rows + transparent-bg toggle + Dev's Reset button), h/l switch level. Every body row reachable from the keyboard.
 4. **User-installable themes** under `~/.kobe/themes/` + user-pickable focus-accent color slot.
-5. **Permission cycler reaches `bypassPermissions`** — `default → acceptEdits → plan → bypass → default`. Lets the user opt into "auto-approve everything" for tasks where the worktree-cwd boundary is too restrictive.
+5. **Permission cycler is a two-mode toggle: `default` ↔ `plan`** (revised 2026-05-10 in commit `41e1f74`, KOB-17, lives under `[Unreleased]` in CHANGELOG until the next cut). kobe's `default` is the trusted-bypass mode — the engine maps it to claude-code's `bypassPermissions` at spawn time. `acceptEdits` is meaningless in `claude -p` (no interactive permission protocol), so it's gone from the cycle and from the `PermissionMode` type union. Persisted state with the legacy values (`acceptEdits` / `bypassPermissions` / `auto` / `dontAsk`) loads as `default`. Composer footer renders the `plan mode` badge only — default has no badge.
 
 All four pane titles align (paddingTop=1, paddingLeft=2). Modals cap at viewport height with internal scroll for long content; the `▌` focus marker was dropped (the bold focus-accent ordinal does that job).
 
@@ -86,7 +87,8 @@ Picker entries also added: `opus 4.7 (1M)`, `sonnet 4.6 (1M)`. Same `[1m]` suffi
 When a tool hits a permission gate (e.g. reading `~/.zshrc` from a worktree cwd), claude-code in `-p` mode has no interactive permission protocol — there is no popup, no approval event in stream-json, no built-in approve/deny UI. The pragmatic answers are:
 
 - **opcode**: spawns with `--dangerously-skip-permissions` universally. Every gate is bypassed, model sees no denials. Verified: `refs/opcode/src-tauri/src/commands/claude.rs:757-768` and `web_server.rs:486-495` both add the flag unconditionally. opcode's "permission" UI you might find by grepping is for swarm leader/worker coordination — unrelated to subprocess gates.
-- **kobe (current, v0.2.2)**: Exposes `bypassPermissions` as a 4th step in the shift+tab cycler (`default → acceptEdits → plan → bypass → default`). User opt-in per task, with the footer badge rendering "bypass permissions" in warning red so the loose-permissions state is visible.
+- **kobe v0.2.2**: Exposed `bypassPermissions` as a 4th step in the shift+tab cycler (`default → acceptEdits → plan → bypass → default`). User opt-in per task. *Revised in [Unreleased] / KOB-17* — see next bullet.
+- **kobe [Unreleased] (KOB-17, commit `41e1f74`)**: kobe's `default` IS opcode's choice. The engine maps `default` (and any non-`plan` value) to `--permission-mode bypassPermissions` at spawn. Rationale: in v0.2.2, `permissionMode=undefined/default` meant "no flag passed," which left claude in its restrictive built-in default — every cwd-boundary read prompted, every tool call hit the gate. From the user's seat that looked like "kobe doesn't have permissions wired up." Since `claude -p` has no interactive permission protocol anyway, the only useful CLI choices are "auto-deny outside cwd" (claude `default`) or "auto-approve everything" (`bypassPermissions`); kobe picked the latter. The shift+tab cycle collapsed to `default ↔ plan` (`acceptEdits` is moot in non-interactive mode).
 - **The proper alternative** (not built): `--permission-prompt-tool <name>` lets claude-code delegate every tool-permission decision to a custom MCP tool. Wiring that up requires (a) a kobe-hosted MCP server implementing the permission tool, (b) registering it on every spawn, (c) routing async permission requests to a UI panel and waiting for approve/deny. ~2-3 day build. Tracked as a follow-up; not in v0.2.x scope.
 
 ### 4. Mid-stream submission modes — the queue/steer feature
@@ -95,9 +97,28 @@ claude-code's own UI implements this via a unified `commandQueue` with three pri
 
 ---
 
+## Architecture review — Jackson's pending decision (added 2026-05-10)
+
+Jackson asked for an "AI-friendly" pass on the codebase: where does the project structure trip up agents (and humans) when reasoning about it, and what should we collapse / re-export to stop imports from flying around. Findings below; **Jackson said "记录下我等下思考"** — these are surfaced for triage, not started yet.
+
+Findings ranked by leverage:
+
+| # | Smell | Data | Proposed fix |
+|---|---|---|---|
+| 1 | **Path aliases under-used** | `tsconfig.json` declares 6 aliases (`@/`, `@tui/`, `@engine/`, `@orchestrator/`, `@types/`, `@test/`). Only **8 imports** in `src/` use them; **93 imports** still write `../../../`. | Codemod-replace relative-to-alias across `src/`. Mechanical; no behavior change; massive readability + AI-friendliness win. File moves stop breaking import chains. ~30 min. Should land as one commit + Linear bullet. |
+| 2 | **`src/` reverse-imports `test/`** | `src/tui/panes/terminal/Terminal.tsx` imports `stripAnsi` from `../../../../test/behavior/screen` — production code reaching 4 levels up into the test tree. | Move `stripAnsi` (and audit for other helpers) into `src/lib/ansi.ts`. Test → src is normal; src → test is a smell. ~5 min. |
+| 3 | **Inconsistent barrels + barrel-as-implementation** | Some panes have a public `index.ts` (filetree, preview, terminal); chat and sidebar don't. `src/engine/claude-code-local/index.ts` is **both a barrel AND a 296-line implementation file** — exports `class ClaudeCodeLocal` defined right inside. | Each pane gets a thin `index.ts` exposing only the public API (`Chat`, `useChatBindings`, props types). Internals (`store.ts`, `tool-banners.ts`, etc.) stay private to the pane. Move `ClaudeCodeLocal` impl out of `engine/claude-code-local/index.ts` into `local.ts`, leave index as a pure barrel. |
+| 4 | **`src/tui/app.tsx` is 2021 lines, 35 imports** | One file owns the shell + all 5 dialogs (Settings, Help, Update, NewTask, ConfirmDelete) + global state plumbing + layout. | Extract dialogs into `src/tui/dialogs/*.tsx`. `app.tsx` ends up just the layout shell + provider tree. Touches `app.tsx` heavily; do AFTER #1 so import paths are stable. |
+| 5 | **`src/orchestrator/core.ts` is 1544 lines** | God class: task lifecycle + event bus + worktree manager wiring + chat tab management + concurrency cap + PR flow. | Bigger surgery. Probably split into `orchestrator/{lifecycle,events,chat-tabs,pr}.ts` with a thin `Orchestrator` facade. Standalone Linear ticket. Defer until #1–#4 land. |
+
+Recommendation order on the table: **#1 → #2 → #3 → #4 → #5**. Jackson hasn't picked yet.
+
+---
+
 ## Open follow-ups (in rough priority order)
 
-1. **Permission-prompt MCP bridge.** v0.2.2 settled for opcode-style `bypassPermissions`. Real fix is the MCP-server route described above. Tracked separately. ~2-3 day estimate.
+0. **Architecture review (above).** Jackson is thinking. Don't start without his pick.
+1. **Permission-prompt MCP bridge.** [Unreleased] settled for opcode-style `bypassPermissions` as kobe's `default`. Real fix is the MCP-server route described above. Tracked separately. ~2-3 day estimate.
 2. **Behavior tests are local-only.** They need tmux + node-pty terminal sizing that CI can't easily provide. CI runs typecheck + unit + build only. Some tests on this machine fail due to local environment quirks (terminal resize timing, tmux extended-keys in test environment). Re-running on Jackson's machine generally passes.
 3. **`extended-keys` requirement** for users who DO want ctrl+digit / CSI-u sequences (the few legitimate ctrl+digit chords in the keymap). `~/.tmux.conf` needs `set -g extended-keys on` + `set -as terminal-features 'xterm*:extkeys'`, AND iTerm2 needs profile-level "Report keys using CSI u." iTerm2's ctrl+1 quirk persists even with that. Documented in `docs/KEYBINDINGS.md`.
 4. **kobe currently re-reads `~/.claude/settings.json` lazily** with a process-lifetime cache. claude-code's own `/model` command rewrites the file mid-session — kobe doesn't pick that up live. Cache invalidation is a follow-up; for now the user restarts kobe to pick up the new default.
@@ -125,3 +146,30 @@ claude-code's own UI implements this via a unified `commandQueue` with three pri
 | 0.2.2   | 2026-05-10 | `bypassPermissions` reachable via shift+tab cycler.                        |
 
 All three published to npm + tagged on GitHub via the release workflow. CHANGELOG entries at `packages/kobe/CHANGELOG.md` are the authoritative descriptions.
+
+---
+
+## Mini-session log (post-v0.2.2 polish, not yet a release)
+
+Tracked here so the next agent knows what's settled vs in flight without a fresh release tag.
+
+### Committed to `main` since v0.2.2
+
+- `5a7286e` `docs(changelog): unwrap soft-wraps + teach skill the no-<br> rule (KOB-13)` — CHANGELOG single-line bullets to fix GitHub release rendering.
+- `41e1f74` `fix(permissions): default auto-bypasses + cycle slimmed to default ↔ plan (KOB-17)` — see Research findings §3 revision above.
+
+### Linear cleanup (this session)
+
+- **KOB-1** (pane focus mouse-only) → Done. Resolved by `85d087d` ctrl+hjkl in v0.2.2.
+- **KOB-8** (queue + steer / 流式中断) → Done. Shipped in v0.2.0 (`d7de07d`, `0cd2a78`, `b153904`).
+- **KOB-4** (permission-ask freeze, 待复现) → still open. Commented: KOB-17's default→bypass eliminates the common-path trigger; plan-mode users could still hit it. Lower urgency now.
+- **KOB-7** (full keyboard workflow audit) → still open as the umbrella feature.
+- **KOB-17** (this session's fix) → Done with SHA comment.
+
+### Skills installed (this session)
+
+- **`/handoff`** at `.claude/skills/handoff/SKILL.md` — adapted from [ykdojo/claude-code-tips](https://github.com/ykdojo/claude-code-tips/blob/main/skills/handoff/SKILL.md). The skill that wrote this very update.
+
+### Working-tree WIP (NOT this session — Jackson said "别人在做的")
+
+There's substantial uncommitted work in the tree from a parallel session — multi-repo sidebar (`kind: main | task` discriminator → KOB-15), filetree git-status indicators (~300 lines), terminal/preview keys, linear skill cleanup. **Don't touch this WIP**; it's owned by another session. The handoff agent for THAT work will surface separately.
