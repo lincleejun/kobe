@@ -1482,13 +1482,11 @@ function Shell(props: AppDeps) {
   }
 
   // ctrl+q from the workspace (chat pane) jumps focus back to the
-  // ctrl+q jumps to the sidebar from ANY pane. Promoted from
-  // workspace-only — `ctrl+1` would do the same thing on terminals
-  // that propagate the chord, but ctrl+digit doesn't reach kobe in
-  // legacy terminal mode (no CSI-u / kitty keyboard, no tmux
-  // extended-keys), so ctrl+letter is the always-works fallback.
+  // ctrl+q jumps from workspace (chat) back to the sidebar.
+  // Workspace-scoped — this is the "trapped in the chat composer,
+  // want out" verb. Other panes use ctrl+1..4 / esc.
   useBindings(() => ({
-    enabled: dialog.stack.length === 0,
+    enabled: focusedPane() === "workspace" && dialog.stack.length === 0,
     bindings: bindByIds({
       "focus.sidebar": () => setFocusedPane("sidebar"),
     }),

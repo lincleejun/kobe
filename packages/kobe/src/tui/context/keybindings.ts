@@ -194,20 +194,15 @@ export const KobeKeymap: readonly KobeBinding[] = [
     hint: { keys: "q", label: "quit" },
   },
   {
-    // Global "back to tasks" chord. ctrl+q works on every terminal
-    // (ctrl+letter maps to a stable C0 control byte) so it's the
-    // reliable fallback even when ctrl+1..4 doesn't reach kobe —
-    // ctrl+digit needs CSI-u / kitty keyboard, which not all
-    // terminals + tmux configurations propagate. Once focused on
-    // the sidebar, plain `q` quits. Promoted from workspace-only
-    // so files/terminal panes can also escape to tasks with the
-    // same chord.
+    // Workspace-only "back to tasks" chord. Plain `q` (sidebar
+    // scope) actually quits; ctrl+q is the chord-form aliased to
+    // sidebar focus, mirroring esc / ctrl+1 in effect.
     id: "focus.sidebar",
-    scope: "global",
+    scope: "workspace",
     keys: ["ctrl+q"],
-    category: "Navigation",
+    category: "Workspace",
     description: "Back to sidebar (tasks)",
-    hint: { keys: "ctrl+q", label: "tasks", pin: "right" },
+    hint: { keys: "ctrl+q", label: "tasks" },
   },
 
   // ─── Navigation ───────────────────────────────────────────────────────
