@@ -1419,12 +1419,22 @@ function Shell(props: AppDeps) {
     }
   }
 
+  // ctrl+q from the workspace (chat pane) jumps focus back to the
+  // sidebar. Scoped to workspace specifically because that's where
+  // the user is "trapped in the chat composer and wants out" — from
+  // the sidebar itself there's nothing to leave, and from files /
+  // terminal the user typically reaches for esc / ctrl+1..4.
+  useBindings(() => ({
+    enabled: focusedPane() === "workspace" && dialog.stack.length === 0,
+    bindings: bindByIds({
+      "focus.sidebar": () => setFocusedPane("sidebar"),
+    }),
+  }))
+
   // `n` (task.new) and `q` (app.quit) only fire when the SIDEBAR
   // is focused — single-letter chords would otherwise collide with
   // composer typing. Once on the sidebar, `n` opens the new-task
-  // dialog and `q` opens the quit-confirm. ctrl+q from anywhere
-  // jumps focus back to the sidebar (registered as `focus.sidebar`
-  // inside useKobeKeybindings → onFocusDetach).
+  // dialog and `q` opens the quit-confirm.
   useBindings(() => ({
     enabled: focusedPane() === "sidebar" && dialog.stack.length === 0,
     bindings: bindByIds({

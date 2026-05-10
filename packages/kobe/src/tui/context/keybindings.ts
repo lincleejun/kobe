@@ -183,16 +183,20 @@ export const KobeKeymap: readonly KobeBinding[] = [
     hint: { keys: "q", label: "quit" },
   },
   {
-    // Always-on shortcut to bring focus back to the sidebar (tasks
-    // list). Same effect as esc / ctrl+1, exposed as ctrl+q so the
-    // muscle memory is "quit-ish chord → exit chat to tasks", and
-    // then plain `q` actually quits.
+    // Workspace-only shortcut to bring focus back to the sidebar
+    // (tasks list). Mirrors esc / ctrl+1 in effect; the chord is
+    // exposed as ctrl+q so the muscle memory is "quit-ish chord →
+    // exit chat to tasks", and then plain `q` (sidebar-scoped)
+    // actually quits. Scoped to `workspace` because it's specifically
+    // the "leave the chat" verb — from the sidebar there's nothing
+    // to leave, and from files / terminal the user typically wants
+    // ctrl+1..4 / esc instead.
     id: "focus.sidebar",
-    scope: "global",
+    scope: "workspace",
     keys: ["ctrl+q"],
-    category: "Navigation",
+    category: "Workspace",
     description: "Back to sidebar (tasks)",
-    hint: { keys: "ctrl+q", label: "tasks", pin: "right" },
+    hint: { keys: "ctrl+q", label: "tasks" },
   },
 
   // ─── Navigation ───────────────────────────────────────────────────────
@@ -621,11 +625,6 @@ export function useKobeKeybindings(opts: KobeKeybindingsOpts): void {
         "help.open": () => opts.onShowHelp(),
         "focus.next": () => onFocusNext(),
         "focus.prev": () => onFocusPrev(),
-        // ctrl+q: shortcut to sidebar from anywhere. Plain `q` is the
-        // sidebar-scoped quit binding (registered separately), so
-        // pressing ctrl+q from the composer lands you on the sidebar
-        // and a follow-up `q` actually quits.
-        "focus.sidebar": () => onFocusDetach(),
         // Ctrl+C is modifier-prefixed so it never collides with composer
         // typing. DialogProvider's own ctrl+c binding sits higher on the
         // stack and still wins while a dialog is open — that's the
