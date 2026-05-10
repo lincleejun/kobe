@@ -139,11 +139,18 @@ export function Loading(props: LoadingProps) {
   }
 
   return (
-    <box flexDirection="row" gap={1} paddingTop={1}>
-      <text fg={theme.accent}>{SPINNER_FRAMES[frame()] ?? SPINNER_FRAMES[0]}</text>
+    <box flexDirection="row" paddingTop={1}>
+      {/* Fixed 2-cell column for the spinner — glyphs `· ✢ ✳ ✶ ✻ ✽` have
+          ambiguous east-asian widths and would otherwise nudge `thinking`
+          left/right each frame. Mirrors claude-code `SpinnerGlyph.tsx:40`
+          (`<Box flexWrap="wrap" height={1} width={2}>`). The 2nd cell
+          doubles as the separator before `thinking`, so no parent gap. */}
+      <box width={2} height={1}>
+        <text fg={theme.accent}>{SPINNER_FRAMES[frame()] ?? SPINNER_FRAMES[0]}</text>
+      </box>
       <text fg={theme.textMuted}>{props.label ?? "thinking"}</text>
       <Show when={showStats()}>
-        <text fg={theme.textMuted}>({stats()})</text>
+        <text fg={theme.textMuted}> ({stats()})</text>
       </Show>
     </box>
   )
