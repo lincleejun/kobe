@@ -74,6 +74,13 @@ async function buildEngine(): Promise<AIEngine> {
     await mountFakeEngineServer(fake)
     return fake
   }
+  if (process.env.KOBE_TEST_ENGINE === "dev-fake") {
+    // `bun run dev:test` mode — auto-replying fake so the dev TUI
+    // exercises the chat round-trip without a real `claude` binary.
+    // No HTTP scripter; canned replies live in DevAIEngine itself.
+    const { DevAIEngine } = await import("../engine/dev-fake.ts")
+    return new DevAIEngine()
+  }
   return new ClaudeCodeLocal()
 }
 

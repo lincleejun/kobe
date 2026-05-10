@@ -38,3 +38,7 @@ tsconfig.vitest-temp.json
 # runtime artefacts. Root .claude/ is already covered above; this
 # catches the same shape one level deeper.
 packages/*/.claude/
+
+# `bun run dev:test` mock environment — seeded by scripts/dev-fixture.ts,
+# contains throwaway git repos + ~/.kobe/~/.claude state.
+packages/*/.dev-fixture/
