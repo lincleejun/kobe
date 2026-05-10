@@ -99,8 +99,10 @@ export type TaskPtyOpts = {
   pollIntervalMs?: number
 }
 
-/** Listener for new pane snapshots. Receives the full visible pane on each tick. */
-export type DataListener = (snapshot: string) => void
+/** Listener for new pane snapshots. Receives the full visible pane plus the
+ * cursor position captured *atomically* with the snapshot — both come from a
+ * single tmux command roundtrip so they describe the exact same grid state. */
+export type DataListener = (snapshot: string, cursor: CursorPos | null) => void
 
 /** Cursor position within the visible pane, 0-based. */
 export type CursorPos = { x: number; y: number }
@@ -221,6 +223,7 @@ export class TmuxTaskPty implements TaskPtyLike {
   private readonly listeners = new Set<DataListener>()
   private pollTimer: ReturnType<typeof setInterval> | null = null
   private lastSnapshot = ""
+  private lastCursor: CursorPos | null = null
   private _killed = false
   private cols: number
   private rows: number
@@ -249,10 +252,53 @@ export class TmuxTaskPty implements TaskPtyLike {
     // and the task was still in_progress), attach to it instead of
     // failing. tmux's `has-session` exits 0 when present, 1 when absent.
     const has = spawnSync(this.tmuxBin, ["has-session", "-t", this.sessionName], { encoding: "utf8" })
-    if (has.status !== 0) {
-      // Create new detached session at the requested cwd, with the
-      // requested shell, with our chosen geometry. -d keeps it
-      // detached; the terminal pane in kobe captures its content.
+    let existed = has.status === 0
+    if (existed) {
+      // Older kobe (before the window-size=manual fix) created sessions
+      // in tmux's default `latest` mode, so the pane was sized to the
+      // host terminal, not our `<Terminal />` body. Even after we now
+      // switch the option and resize, the shell's prompt was rendered
+      // against the OLD grid — `cursor_y` then reports against a grid
+      // shape that doesn't match what `capture-pane` returns under the
+      // new size. Symptom: cursor block lands one row above the live
+      // prompt and stays there. Detect "session pre-dates the fix" by
+      // checking whether tmux is still reporting a pane far larger than
+      // we ever asked for, and start clean if so.
+      try {
+        const probe = tmuxSync(this.tmuxBin, [
+          "display-message",
+          "-p",
+          "-t",
+          this.sessionName,
+          "-F",
+          "#{pane_height}x#{pane_width}",
+        ]).trim()
+        const [hStr] = probe.split("x")
+        const liveH = Number.parseInt(hStr ?? "0", 10)
+        // If the pane is more than 1.5× our requested rows, it was
+        // sized for some other client and a clean restart is cheaper
+        // (and more correct) than trying to re-flow stale state.
+        if (Number.isFinite(liveH) && liveH > this.rows * 1.5) {
+          tmuxSync(this.tmuxBin, ["kill-session", "-t", this.sessionName])
+          existed = false
+        }
+      } catch {
+        /* probe failed — treat as needing recreation */
+        existed = false
+      }
+    }
+    if (!existed) {
+      // Set the option BEFORE creating the session so tmux uses our
+      // requested -x/-y from the very first render. Setting `manual`
+      // requires either a target session OR `-g` for global; since
+      // there's no session yet, go global. The option sticks per-server
+      // but only applies to sessions; harmless for any other tmux usage
+      // outside kobe.
+      try {
+        tmuxSync(this.tmuxBin, ["set-option", "-g", "window-size", "manual"])
+      } catch {
+        /* older tmux without this option — fall through. */
+      }
       tmuxSync(this.tmuxBin, [
         "new-session",
         "-d",
@@ -266,23 +312,37 @@ export class TmuxTaskPty implements TaskPtyLike {
         opts.cwd,
         shell,
       ])
-    } else {
-      // Pre-existing session — just resize to our requested dims so
-      // the captured pane lines up with the renderer.
-      this.resize(this.cols, this.rows)
     }
+    // Belt-and-suspenders: also pin per-session window-size so this
+    // session survives later changes to the global option, then push
+    // the geometry one more time.
+    try {
+      tmuxSync(this.tmuxBin, ["set-option", "-t", this.sessionName, "window-size", "manual"])
+    } catch {
+      /* best effort */
+    }
+    this.resize(this.cols, this.rows)
 
     // Begin polling for output.
     const pollMs = opts.pollIntervalMs ?? DEFAULT_POLL_MS
     this.pollTimer = setInterval(() => {
       if (this._killed) return
       try {
-        const snap = this.capture()
-        if (snap !== this.lastSnapshot) {
-          this.lastSnapshot = snap
+        const { snapshot, cursor } = this.captureWithCursorRaw()
+        const snapChanged = snapshot !== this.lastSnapshot
+        const cursorChanged =
+          (cursor?.x ?? null) !== (this.lastCursor?.x ?? null) ||
+          (cursor?.y ?? null) !== (this.lastCursor?.y ?? null)
+        // Always update both — listeners receive the latest atomic pair
+        // even when only the cursor moved (e.g. arrow-key nav inside an
+        // unchanged line, or zsh's RPROMPT redraw landing the cursor at
+        // a different column on the same content).
+        this.lastSnapshot = snapshot
+        this.lastCursor = cursor
+        if (snapChanged || cursorChanged) {
           for (const cb of this.listeners) {
             try {
-              cb(snap)
+              cb(snapshot, cursor)
             } catch {
               // never let one listener kill the rest
             }
@@ -367,7 +427,7 @@ export class TmuxTaskPty implements TaskPtyLike {
     // current pane content without waiting for a poll tick.
     if (this.lastSnapshot !== "") {
       try {
-        cb(this.lastSnapshot)
+        cb(this.lastSnapshot, this.lastCursor)
       } catch {
         /* swallow */
       }
@@ -400,9 +460,7 @@ export class TmuxTaskPty implements TaskPtyLike {
 
   capture(): string {
     if (this._killed) return this.lastSnapshot
-    // -p prints to stdout; -e preserves escape codes if we ever want
-    // them, but we strip via the renderer. -J joins wrapped lines.
-    return tmuxSync(this.tmuxBin, ["capture-pane", "-p", "-J", "-t", this.sessionName])
+    return this.captureWithCursorRaw().snapshot
   }
 
   /**
@@ -415,29 +473,69 @@ export class TmuxTaskPty implements TaskPtyLike {
    */
   captureCursor(): CursorPos | null {
     if (this._killed) return null
+    return this.captureWithCursorRaw().cursor
+  }
+
+  /**
+   * Atomic snapshot + cursor read. Critical: `capture-pane` and
+   * `display-message` must be issued in ONE tmux command, separated by
+   * `;`, so the tmux server processes them back-to-back without
+   * yielding to the shell. Two separate `spawnSync` calls leave a
+   * window where the shell can move its cursor between the snapshot
+   * and the cursor read — which surfaced as the cursor block landing
+   * one row above the live prompt right after a command finished
+   * (snapshot caught the new prompt, cursor read caught the previous
+   * line's still-stale position).
+   *
+   * Notes on the protocol:
+   *   - We deliberately do NOT pass `-J` to capture-pane: tmux reports
+   *     `cursor_x` / `cursor_y` against the PHYSICAL pane grid (one
+   *     row per terminal grid row), so joining wrapped lines breaks
+   *     the (x,y) → render coordinate mapping. With raw capture each
+   *     pane row is exactly one rendered line.
+   *   - Cursor format ends with a newline, so we strip the trailing
+   *     line and parse the marker-prefixed payload. The marker keeps
+   *     us safe from a snapshot whose last line happens to look like
+   *     two integers.
+   */
+  private captureWithCursorRaw(): { snapshot: string; cursor: CursorPos | null } {
+    // Marker MUST be printable ASCII. tmux's `display-message -F` escapes
+    // non-printable bytes (e.g. SOH `\u0001` becomes the literal 4 chars
+    // `\001`), so a control-byte fence collides with the escape itself
+    // and lastIndexOf never matches — the marker line then leaks into
+    // the rendered snapshot. Triple-angle brackets are unlikely to
+    // appear in shell output and survive tmux's format filter intact.
+    const CURSOR_MARK = "<<<KOBE_CURSOR>>>"
+    let out: string
     try {
-      const out = tmuxSync(this.tmuxBin, [
+      out = tmuxSync(this.tmuxBin, [
+        "capture-pane",
+        "-p",
+        "-t",
+        this.sessionName,
+        ";",
         "display-message",
         "-p",
         "-t",
         this.sessionName,
         "-F",
-        "#{cursor_x} #{cursor_y}",
+        `${CURSOR_MARK}#{cursor_x} #{cursor_y}`,
       ])
-      const trimmed = out.trim()
-      if (!trimmed) return null
-      const parts = trimmed.split(/\s+/)
-      if (parts.length < 2) return null
-      const xPart = parts[0]
-      const yPart = parts[1]
-      if (xPart === undefined || yPart === undefined) return null
-      const x = Number.parseInt(xPart, 10)
-      const y = Number.parseInt(yPart, 10)
-      if (!Number.isFinite(x) || !Number.isFinite(y)) return null
-      return { x, y }
     } catch {
-      return null
+      return { snapshot: this.lastSnapshot, cursor: null }
     }
+    const markIdx = out.lastIndexOf(CURSOR_MARK)
+    if (markIdx === -1) return { snapshot: out, cursor: null }
+    const snapshot = out.slice(0, markIdx).replace(/\n$/, "")
+    const cursorLine = out.slice(markIdx + CURSOR_MARK.length).trim()
+    const parts = cursorLine.split(/\s+/)
+    const xPart = parts[0]
+    const yPart = parts[1]
+    if (xPart === undefined || yPart === undefined) return { snapshot, cursor: null }
+    const x = Number.parseInt(xPart, 10)
+    const y = Number.parseInt(yPart, 10)
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return { snapshot, cursor: null }
+    return { snapshot, cursor: { x, y } }
   }
 
   kill(): void {
@@ -510,7 +608,7 @@ export class MockTaskPty implements TaskPtyLike {
     this.buffer += data
     for (const cb of this.listeners) {
       try {
-        cb(this.buffer)
+        cb(this.buffer, this._cursor)
       } catch {
         /* swallow */
       }
@@ -526,7 +624,7 @@ export class MockTaskPty implements TaskPtyLike {
     this.listeners.add(cb)
     if (this.buffer !== "") {
       try {
-        cb(this.buffer)
+        cb(this.buffer, this._cursor)
       } catch {
         /* swallow */
       }

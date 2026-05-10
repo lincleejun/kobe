@@ -10,6 +10,12 @@
  *
  *   - `ctrl+pgup`   — scroll the local scrollback up by one page
  *   - `ctrl+pgdown` — scroll the local scrollback down by one page
+ *   - `RESERVED_GLOBAL_CHORDS` (in `./keys-pure.ts`) — chords that must
+ *     stay reachable as kobe-global escape hatches when the terminal is
+ *     focused: `ctrl+h/j/k/l` (pane focus), `shift+tab` (pane cycle prev),
+ *     `f1` / `ctrl+p` / `ctrl+,` (help, palette, settings). Without
+ *     skipping these, the user is trapped inside the terminal pane with
+ *     no way back to the tasks list.
  *
  * Rationale for the exception: the scrollback view is a kobe-rendered
  * widget, not the live tmux pane content. Scrolling is a UI gesture,
@@ -34,7 +40,13 @@ import type { KeyEvent } from "@opentui/core"
 import type { Accessor } from "solid-js"
 import { bindByIds } from "../../context/keybindings"
 import { useBindings } from "../../lib/keymap"
-import { DEFAULT_PAGE_SIZE, PASSTHROUGH_NAMES, TRAPPED_KEYS, keyEventToShellBytes } from "./keys-pure"
+import {
+  DEFAULT_PAGE_SIZE,
+  PASSTHROUGH_NAMES,
+  RESERVED_GLOBAL_CHORDS,
+  TRAPPED_KEYS,
+  keyEventToShellBytes,
+} from "./keys-pure"
 
 // Re-export pure helpers so callers can import everything from one path.
 export { DEFAULT_PAGE_SIZE, TRAPPED_KEYS, keyEventToShellBytes }
@@ -86,21 +98,27 @@ export function useTerminalBindings(opts: TerminalBindingsOpts): void {
     }),
   )
 
+  const reserved = new Set<string>(RESERVED_GLOBAL_CHORDS)
   for (const name of PASSTHROUGH_NAMES) {
-    bindings.push({
-      key: name,
-      cmd: (evt) => {
-        const bytes = keyEventToShellBytes(evt)
-        if (bytes != null) opts.write(bytes)
-      },
-    })
-    bindings.push({
-      key: `ctrl+${name}`,
-      cmd: (evt) => {
-        const bytes = keyEventToShellBytes(evt)
-        if (bytes != null) opts.write(bytes)
-      },
-    })
+    if (!reserved.has(name)) {
+      bindings.push({
+        key: name,
+        cmd: (evt) => {
+          const bytes = keyEventToShellBytes(evt)
+          if (bytes != null) opts.write(bytes)
+        },
+      })
+    }
+    const ctrlChord = `ctrl+${name}`
+    if (!reserved.has(ctrlChord)) {
+      bindings.push({
+        key: ctrlChord,
+        cmd: (evt) => {
+          const bytes = keyEventToShellBytes(evt)
+          if (bytes != null) opts.write(bytes)
+        },
+      })
+    }
   }
 
   useBindings(() => ({

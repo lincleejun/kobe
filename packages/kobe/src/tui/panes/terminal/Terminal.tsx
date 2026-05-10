@@ -46,7 +46,7 @@
 
 import { basename } from "node:path"
 import { type BoxRenderable, TextAttributes } from "@opentui/core"
-import { useRenderer } from "@opentui/solid"
+import { useRenderer, useTerminalDimensions } from "@opentui/solid"
 import { type Accessor, type JSXElement, Show, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js"
 import { stripAnsi } from "../../../../test/behavior/screen"
 import { useTheme } from "../../context/theme"
@@ -174,31 +174,22 @@ export function Terminal(props: TerminalProps): JSXElement {
       // Reset scroll on task switch — every task gets its own viewport.
       setScrollOffset(0)
 
-      // Refresh cursor whenever a fresh snapshot arrives. tmux's cursor
-      // moves on every shell input/echo, so coupling it to the snapshot
-      // tick keeps text + cursor visually in sync without a second timer.
-      const refreshCursor = () => {
-        try {
-          setCursor(handle.captureCursor())
-        } catch {
-          setCursor(null)
-        }
-      }
-
-      // Subscribe; unsubscribe on cleanup OR when the effect re-runs.
-      const unsubscribe = handle.onData((snap) => {
+      // Subscribe; the listener receives `(snapshot, cursor)` from a
+      // single atomic tmux roundtrip — they describe the SAME grid
+      // state, so we never display a stale cursor on a fresh snapshot.
+      const unsubscribe = handle.onData((snap, c) => {
         setSnapshot(stripAnsi(snap))
-        refreshCursor()
+        setCursor(c)
       })
-      // If the pty already had a buffer, capture it once so we render
-      // immediately without waiting for the first poll tick.
+      // If the pty already had a buffer, prime the renderer immediately
+      // so a freshly-mounted Terminal doesn't blink empty for one tick.
       try {
         const initial = handle.capture()
         if (initial) setSnapshot(stripAnsi(initial))
+        setCursor(handle.captureCursor())
       } catch {
         /* capture can fail on a freshly-spawned tmux pane; ignore */
       }
-      refreshCursor()
       onCleanup(() => {
         unsubscribe()
       })
@@ -278,18 +269,48 @@ export function Terminal(props: TerminalProps): JSXElement {
    * render but tmux's cursor lives in a different coordinate space,
    * which is exactly the off-by-many-rows symptom the user reported.
    */
-  let bodyRef: BoxRenderable | undefined
+  const [bodyRef, setBodyRef] = createSignal<BoxRenderable | null>(null)
   const renderer = useRenderer()
+  // Reactive terminal dims — when the host window resizes, this changes
+  // and re-fires effects that read the body's live `width/height`.
+  const dims = useTerminalDimensions()
+
+  // Layout-tick signal — bumped on a slow interval so effects that read
+  // non-reactive geometry (`ref.width/height/screenX/screenY`) catch up
+  // with layout changes that don't have their own Solid signal (the
+  // splitter drag in app.tsx mutates pane-size signals, but the *body*
+  // box's width is computed downstream, and Solid doesn't observe it
+  // through the BoxRenderable instance). We deliberately DO NOT use
+  // a per-frame callback here — it triggered tmux `resize-window` every
+  // frame, and the resulting SIGWINCH storm made p10k / pure / oh-my-zsh
+  // re-emit their prompt several times on mount.
+  const [geomTick, setGeomTick] = createSignal(0)
+  const geomTimer = setInterval(() => {
+    setGeomTick((n) => (n + 1) & 0xff)
+  }, 250)
+  onCleanup(() => clearInterval(geomTimer))
+
+  // Track last pushed geometry so we don't fire `pty.resize` on every
+  // re-render — tmux re-applying the same dims still sends SIGWINCH and
+  // makes prompt-rendering shells (oh-my-zsh, p10k) reprint their
+  // prompt, which surfaces as spurious empty `>` lines on mount.
+  let lastResize: { cols: number; rows: number } | null = null
 
   // Push the rendered body's geometry to tmux so cursor coords align.
   createEffect(() => {
     const handle = pty()
-    const ref = bodyRef
+    const ref = bodyRef()
+    // Read dims + geomTick so this effect re-runs when the host
+    // terminal resizes OR a splitter drag changes our body size.
+    dims()
+    geomTick()
     if (!handle || !ref) return
     // Subtract the body's own paddingLeft/paddingRight (1+1) from the
     // usable width so the shell doesn't try to write into the padding.
     const cols = Math.max(20, ref.width - 2)
     const rows = Math.max(4, ref.height)
+    if (lastResize && lastResize.cols === cols && lastResize.rows === rows) return
+    lastResize = { cols, rows }
     try {
       handle.resize(cols, rows)
     } catch {
@@ -297,9 +318,14 @@ export function Terminal(props: TerminalProps): JSXElement {
     }
   })
 
-  // Drive the native cursor.
+  // Drive the native cursor. Re-runs on cursor(), focused(),
+  // scrollOffset(), bodyRef, and host-window resize. Cursor() updates
+  // every ~80 ms from the PTY poll loop, which is more than enough to
+  // keep the visible block in sync with the shell.
   createEffect(() => {
-    const ref = bodyRef
+    const ref = bodyRef()
+    dims()
+    geomTick()
     if (!ref) return
     const c = cursor()
     if (!showCursor() || !c) {
@@ -307,7 +333,22 @@ export function Terminal(props: TerminalProps): JSXElement {
       renderer.setCursorPosition(0, 0, false)
       return
     }
+    // Make sure the host terminal actually draws something — some
+    // emulators default to a hidden cursor inside alt-screen until a
+    // style is explicitly set. Block + blinking matches what a normal
+    // shell looks like, so the user sees the same affordance they'd
+    // see typing into bash directly.
+    try {
+      renderer.setCursorStyle({ style: "block", blinking: true })
+    } catch {
+      /* older opentui versions may not expose setCursorStyle; ignore */
+    }
     // body has paddingLeft=1, so column 0 of the snapshot is at screenX+1.
+    // Cursor coords are 0-based pane row/col, atomically captured with
+    // the snapshot. Now that the PTY constructor forces the detached
+    // session's `window-size` to `manual`, tmux's pane grid actually
+    // matches our body height — so cursor_y indexes our rendered lines
+    // 1:1 and no off-by-one fudge is needed.
     renderer.setCursorPosition(ref.screenX + 1 + c.x, ref.screenY + c.y, true)
   })
 
@@ -362,7 +403,7 @@ export function Terminal(props: TerminalProps): JSXElement {
       >
         <box
           ref={(r: BoxRenderable) => {
-            bodyRef = r
+            setBodyRef(r)
           }}
           flexGrow={1}
           paddingLeft={1}

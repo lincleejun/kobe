@@ -78,6 +78,34 @@ export const DEFAULT_PAGE_SIZE = 10
 export const TRAPPED_KEYS = ["ctrl+pageup", "ctrl+pagedown"] as const
 
 /**
+ * Chord strings the terminal pane must NEVER passthrough to the shell —
+ * these are kobe's global escape hatches and have to win against the
+ * pane-local PTY forwarder. Without this list, ctrl+hjkl/shift+tab/F1/
+ * palette chords get consumed as shell input and the user is trapped
+ * inside the terminal pane with no way back to the tasks list.
+ *
+ * Notes on what's *not* here:
+ *   - bare `escape` and `tab` stay as passthrough so vim and shell tab
+ *     completion still work inside the embedded terminal.
+ *   - `ctrl+pageup`/`ctrl+pagedown` are already trapped earlier in the
+ *     same bindings array (scrollback) — first-match-wins handles them.
+ */
+export const RESERVED_GLOBAL_CHORDS: readonly string[] = [
+  // Pane focus (focus.numeric) — primary escape hatch out of the terminal.
+  "ctrl+h",
+  "ctrl+j",
+  "ctrl+k",
+  "ctrl+l",
+  // Pane cycle (focus.prev). focus.next is bare `tab` and stays passthrough
+  // so shell completion works; users get out via shift+tab or ctrl+hjkl.
+  "shift+tab",
+  // Help / palette / settings.
+  "f1",
+  "ctrl+p",
+  "ctrl+,",
+] as const
+
+/**
  * Names opentui's keypress events use that we want forwarded to the
  * shell when the terminal pane is focused. Lives here (pure) so
  * `keys.ts` (Solid hook) and tests both consume the same source.
