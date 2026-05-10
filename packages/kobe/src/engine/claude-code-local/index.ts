@@ -194,8 +194,25 @@ export class ClaudeCodeLocal implements AIEngine {
     // For resume, we already have the id — bind eagerly. The first
     // `system.init` from claude (if any) is a no-op (sessionIdEmitted
     // gating in the parser).
+    //
+    // If `register()` throws here (a live duplicate — registry held
+    // the same sessionId at sync-bind time), we MUST kill the
+    // subprocess we just spawned, otherwise it runs orphaned with no
+    // consumer reading stdout. Without this, the orphan eventually
+    // blocks on a full pipe and leaks until kobe restarts.
     if (args.resumeSessionId) {
-      bind(args.resumeSessionId)
+      try {
+        bind(args.resumeSessionId)
+      } catch (err) {
+        try {
+          spawned.proc.kill("SIGKILL")
+        } catch {
+          // proc might already be gone or unreachable; the rejection
+          // is what callers wait on.
+        }
+        rejectHandle(err)
+        throw err
+      }
     }
 
     // Pump the parser into the queue. We start this inside an async

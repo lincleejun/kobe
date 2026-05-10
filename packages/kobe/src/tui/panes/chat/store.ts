@@ -270,11 +270,11 @@ export function createInitialState(): ChatState {
 /**
  * Soft cap on queued prompts. Past this we reject further enqueues
  * with a system row instead of growing the queue without bound.
- * 10 is generous — claude-code has no documented cap, but in practice
- * a healthy "queue" pattern is 1-2 prompts deep. If the user wants
- * more, they can wait for drain or switch to steer.
+ * 50 leaves plenty of headroom for spam-typing several thoughts in
+ * a row without rejecting; the user can still hit the cap by
+ * actively trying. claude-code itself has no documented cap.
  */
-export const QUEUE_SOFT_CAP = 10
+export const QUEUE_SOFT_CAP = 50
 
 /**
  * Replace messages from `engine.readHistory(sessionId)`. Called once

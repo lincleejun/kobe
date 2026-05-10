@@ -33,10 +33,37 @@ export interface ProcessHandle {
 export class SessionRegistry {
   private readonly handles = new Map<string, ProcessHandle>()
 
-  /** Register a fresh session. Throws if `sessionId` is already taken. */
+  /**
+   * Register a fresh session.
+   *
+   * If a prior entry exists, distinguish two cases:
+   *
+   *   - **Live duplicate** — the prior proc is still running. This is
+   *     a real conflict (caller is racing two starts on the same
+   *     sessionId). Throw — the second call must back off.
+   *
+   *   - **Stale duplicate** — the prior proc has already exited, but
+   *     its cleanup didn't unregister (timing race between the parse
+   *     IIFE's finally and our engine.stop, or a partial failure that
+   *     left the entry orphaned). Treat as "registry empty": drop
+   *     the stale handle, register the fresh one. The live process
+   *     wins; the dead one was going to be unregistered anyway.
+   *
+   * Without the stale-entry recovery, a single missed cleanup (often
+   * from a transient throw deep in the parse pipeline) makes every
+   * subsequent `claude --resume <sid>` fail forever, because the
+   * sessionId is reused across resumes — the registry slot is
+   * load-bearing for the entire lifetime of the session, not just one
+   * subprocess.
+   */
   register(handle: ProcessHandle): void {
-    if (this.handles.has(handle.sessionId)) {
-      throw new Error(`SessionRegistry: duplicate sessionId ${handle.sessionId}`)
+    const existing = this.handles.get(handle.sessionId)
+    if (existing) {
+      const stale = existing.proc.exitCode !== null || existing.proc.signalCode !== null
+      if (!stale) {
+        throw new Error(`SessionRegistry: duplicate sessionId ${handle.sessionId}`)
+      }
+      // Fall through and overwrite the stale entry.
     }
     this.handles.set(handle.sessionId, handle)
   }
