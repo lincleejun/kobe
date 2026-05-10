@@ -352,21 +352,31 @@ export function SettingsDialog(props: SettingsDialogProps) {
                 Clears ~/.config/kobe/state.json — pane sizes, last selected task, open chat tabs, model picks. Tasks
                 themselves are not touched.
               </text>
-              <box
-                flexDirection="row"
-                paddingLeft={1}
-                paddingRight={1}
-                paddingTop={0}
-                paddingBottom={0}
-                backgroundColor={theme.backgroundElement}
-                onMouseUp={() => {
-                  void confirmReset()
-                }}
-              >
-                <text fg={theme.warning} attributes={TextAttributes.BOLD}>
-                  [enter] Reset
-                </text>
-              </box>
+              {/* Same row-cursor pattern as General's body rows — when
+                  the body level owns the cursor, this row paints in
+                  the primary color so the user sees what `enter`
+                  would activate. Click also drills focus into the
+                  body level, mirroring the General rows' behaviour. */}
+              {(() => {
+                const isCursor = () => level() === "body" && bodyRow() === 0
+                return (
+                  <box
+                    flexDirection="row"
+                    paddingLeft={1}
+                    paddingRight={1}
+                    backgroundColor={isCursor() ? theme.primary : theme.backgroundElement}
+                    onMouseUp={() => {
+                      setLevel("body")
+                      setBodyRow(0)
+                      void confirmReset()
+                    }}
+                  >
+                    <text fg={isCursor() ? theme.selectedListItemText : theme.warning} attributes={TextAttributes.BOLD}>
+                      [enter] Reset
+                    </text>
+                  </box>
+                )
+              })()}
             </box>
           </Show>
         </box>
