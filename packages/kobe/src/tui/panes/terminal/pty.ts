@@ -331,8 +331,7 @@ export class TmuxTaskPty implements TaskPtyLike {
         const { snapshot, cursor } = this.captureWithCursorRaw()
         const snapChanged = snapshot !== this.lastSnapshot
         const cursorChanged =
-          (cursor?.x ?? null) !== (this.lastCursor?.x ?? null) ||
-          (cursor?.y ?? null) !== (this.lastCursor?.y ?? null)
+          (cursor?.x ?? null) !== (this.lastCursor?.x ?? null) || (cursor?.y ?? null) !== (this.lastCursor?.y ?? null)
         // Always update both — listeners receive the latest atomic pair
         // even when only the cursor moved (e.g. arrow-key nav inside an
         // unchanged line, or zsh's RPROMPT redraw landing the cursor at

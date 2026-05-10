@@ -155,7 +155,15 @@ function optionalString(params: Record<string, unknown>, key: string): string | 
   return v
 }
 
-function serializeTask(task: { id: string; title: string; repo: string; branch: string; worktreePath: string; status: string; sessionId: string | null }): Record<string, unknown> {
+function serializeTask(task: {
+  id: string
+  title: string
+  repo: string
+  branch: string
+  worktreePath: string
+  status: string
+  sessionId: string | null
+}): Record<string, unknown> {
   return {
     id: task.id,
     title: task.title,

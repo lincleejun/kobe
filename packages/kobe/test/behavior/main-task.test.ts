@@ -206,9 +206,9 @@ test("with one saved repo, a ★ row appears at the top of the sidebar with the 
   expect(mainAfterCancel?.archived).toBe(false)
   // The savedRepos entry must also still be there — cancel must not
   // run removeSavedRepo.
-  const stateAfter = JSON.parse(
-    fs.readFileSync(path.join(homeDir, ".config", "kobe", "state.json"), "utf8"),
-  ) as { savedRepos?: string[] }
+  const stateAfter = JSON.parse(fs.readFileSync(path.join(homeDir, ".config", "kobe", "state.json"), "utf8")) as {
+    savedRepos?: string[]
+  }
   expect(stateAfter.savedRepos).toContain(repo)
 
   await kobe.exit()

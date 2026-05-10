@@ -19,8 +19,8 @@ import { execFileSync, spawnSync } from "node:child_process"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { isPathChanged, readDiff, readFile } from "@/tui/panes/preview/diff"
+import { afterEach, beforeEach, describe, expect, it } from "vitest"
 
 function git(args: string[], cwd: string): void {
   execFileSync("git", args, { cwd, stdio: "pipe" })

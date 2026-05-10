@@ -202,9 +202,7 @@ describe("parseStreamJson", () => {
             type: "user",
             parent_tool_use_id: null,
             message: {
-              content: [
-                { type: "tool_result", tool_use_id: parentAgentId, content: "found 2 .md files" },
-              ],
+              content: [{ type: "tool_result", tool_use_id: parentAgentId, content: "found 2 .md files" }],
             },
           }),
           JSON.stringify({ type: "result", subtype: "success" }),

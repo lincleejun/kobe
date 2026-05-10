@@ -12,15 +12,15 @@
  */
 
 import { spawnSync } from "node:child_process"
-import { readFile } from "node:fs/promises"
 import fs from "node:fs"
+import { readFile } from "node:fs/promises"
 import { connect } from "node:net"
 import os from "node:os"
 import path from "node:path"
 import { afterEach, beforeEach, describe, expect, test } from "vitest"
+import { startBridge } from "../../src/orchestrator/bridge/index.ts"
 import { Orchestrator } from "../../src/orchestrator/core.ts"
 import { TaskIndexStore } from "../../src/orchestrator/index/store.ts"
-import { startBridge } from "../../src/orchestrator/bridge/index.ts"
 import { GitWorktreeManager } from "../../src/orchestrator/worktree/manager.ts"
 import { FakeAIEngine } from "../behavior/fake-engine.ts"
 
@@ -45,7 +45,7 @@ afterEach(() => {
   } catch {
     /* ignore */
   }
-  delete process.env.KOBE_MCP_CONFIG
+  process.env.KOBE_MCP_CONFIG = undefined
 })
 
 /** Round-trip one JSON-line request/response over the bridge socket. */
