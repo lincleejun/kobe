@@ -29,15 +29,13 @@ import { type KobeOrchestrator, RemoteOrchestrator } from "../client/remote-orch
 import { Orchestrator } from "../orchestrator/core.ts"
 import { TaskIndexStore } from "../orchestrator/index/store.ts"
 import { GitWorktreeManager } from "../orchestrator/worktree/manager.ts"
-import { getSavedRepos, removeSavedRepo } from "../state/repos.ts"
+import { getSavedRepos } from "../state/repos.ts"
 import type { ChatTab } from "../types/task.ts"
 import { type UpdateInfo, checkLatestVersion } from "../version.ts"
 import { buildEngine } from "./engine-bootstrap"
 import { CenterTabStrip } from "./component/center-tab-strip"
 import { HelpDialog } from "./component/help-dialog"
-import { NewTaskDialog } from "./component/new-task-dialog"
 import { PaneHeader } from "./component/pane-header"
-import { RenameTaskDialog } from "./component/rename-task-dialog"
 import { ResizableEdge } from "./component/resizable-edge"
 import { StatusBar } from "./component/status-bar"
 import { TopBar } from "./component/top-bar"
@@ -50,6 +48,7 @@ import { ThemeProvider, addTheme, useTheme } from "./context/theme"
 import { loadUserThemes } from "./context/theme/loader"
 import { useAppKeymap } from "./app-keymap"
 import { usePaneSizes } from "./lib/use-pane-sizes"
+import { useTaskActions } from "./lib/use-task-actions"
 import { useThemePersistence } from "./lib/use-theme-persistence"
 import { useWorkspaceTabs } from "./lib/use-workspace-tabs"
 import { Chat } from "./panes/chat/Chat"
@@ -58,7 +57,6 @@ import { Preview, type PreviewApi } from "./panes/preview"
 import { Sidebar } from "./panes/sidebar/Sidebar"
 import { Terminal } from "./panes/terminal"
 import { DialogProvider, useDialog } from "./ui/dialog"
-import { DialogConfirm } from "./ui/dialog-confirm"
 
 const DEFAULT_THEME = "claude"
 
@@ -306,146 +304,19 @@ function Shell(props: AppDeps) {
     },
   })
 
-  // Shared "open new-task dialog and create" handler. Bound to two
-  // keys with different `enabled` guards (see useBindings calls below).
-  async function openNewTaskFlow(): Promise<void> {
-    // Default the dialog to the last repo the user picked, falling
-    // back to cwd. Persisted via KV so it survives kobe restarts.
-    const lastRepo = (() => {
-      const raw = kv.get("lastNewTaskRepo")
-      return typeof raw === "string" && raw.trim() ? raw : process.cwd()
-    })()
-    const result = await NewTaskDialog.show(dialog, lastRepo, savedRepos())
-    if (!result) return
-    try {
-      // Dialog no longer asks for a first prompt — orchestrator gives
-      // the task PLACEHOLDER_TASK_TITLE and back-fills it from the
-      // user's first composer submit (see runTask). The user lands on
-      // the chat composer ready to type.
-      const created = await props.orchestrator.createTask({
-        repo: result.repo,
-        baseRef: result.baseRef,
-      })
-      kv.set("lastNewTaskRepo", result.repo)
-      setSelectedId(created.id)
-      // Pull focus to the chat pane so the user can immediately type
-      // / use chat-pane-scoped keybindings (ctrl+t for new chat tab,
-      // ctrl+1..9 / ctrl+tab to navigate tabs, ctrl+w to close one)
-      // without an extra ctrl+2. Mirrors the sidebar's onSelect
-      // behaviour — both "user wants to look at this task" entry
-      // points should land in the same place.
-      setFocusedPane("workspace")
-    } catch (err) {
-      // Surface failure as stderr; we don't have a global banner yet,
-      // and the chat pane may not be subscribed (no task selected).
-      // eslint-disable-next-line no-console
-      console.error("[kobe] createTask failed:", err)
-    }
-  }
-
-  /**
-   * Confirm + delete a task. Wired from the sidebar's `d` keypress
-   * (and a future right-click in Wave 4). Per CLAUDE.md the user's
-   * `d` press IS the explicit consent for clearing the worktree, but
-   * we still gate behind a confirm because the action is destructive
-   * and out-of-frame state (other terminal windows, in-progress writes)
-   * could mean "press the wrong key once" → "lose work."
-   */
-  /**
-   * Open the rename dialog for a task and persist the new title.
-   * Mirrors `confirmDeleteTask` in shape: resolve task → run dialog →
-   * await orchestrator. The orchestrator's `setTitle` does its own
-   * empty-title rejection and same-as-current no-op, so we only need
-   * to gate on "did the user submit a value at all" here. The dialog
-   * itself rejects empty submits before calling onSubmit, so a
-   * resolved-with-string from the promise is always usable.
-   */
-  async function confirmRenameTask(taskId: string): Promise<void> {
-    const task = props.orchestrator.getTask(taskId)
-    if (!task) return
-    const next = await RenameTaskDialog.show(dialog, task.title)
-    if (next === undefined) return
-    try {
-      await props.orchestrator.setTitle(taskId, next)
-    } catch (err) {
-      // Empty/whitespace-only — defensive: dialog's commit() filters
-      // these but a future code path could call this with anything.
-      // eslint-disable-next-line no-console
-      console.error("[kobe] setTitle failed:", err)
-    }
-  }
-
-  /**
-   * Open the rename dialog for the active chat tab on the active task
-   * and persist the new label. Mirrors `confirmRenameTask` shape but
-   * targets `tabs[i].title` instead of `task.title`. Pre-fills with
-   * the current label (or the auto-derived `chat N` fallback if the
-   * tab has never been named).
-   */
-  async function confirmRenameChatTab(tabId: string): Promise<void> {
-    const taskId = selectedId()
-    if (!taskId) return
-    const task = props.orchestrator.getTask(taskId)
-    if (!task) return
-    const tab = task.tabs.find((t) => t.id === tabId)
-    if (!tab) return
-    const fallback = `chat ${tab.seq}`
-    const current = tab.title && tab.title.length > 0 ? tab.title : fallback
-    const next = await RenameTaskDialog.show(dialog, current, { dialogTitle: "Rename chat tab" })
-    if (next === undefined) return
-    try {
-      await props.orchestrator.setTabTitle(taskId, tabId, next)
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.error("[kobe] setTabTitle failed:", err)
-    }
-  }
-
-  async function confirmDeleteTask(taskId: string): Promise<void> {
-    const task = props.orchestrator.getTask(taskId)
-    if (!task) return
-    // KOB-15: pressing `d` on a pinned "main" task row does NOT delete
-    // the user's actual repo. Instead the row is bound to a saved-
-    // repos entry; the destructive verb is "remove from saved repos."
-    // The directory and its files stay on disk; the task is archived
-    // (not removed from the manifest) so a re-add via `kobe add` is
-    // symmetric — `ensureMainTask` finds and unarchives it.
-    if (task.kind === "main") {
-      const repoLabel = task.repo.split("/").filter(Boolean).pop() ?? task.repo
-      const ok = await DialogConfirm.show(
-        dialog,
-        `Remove '${repoLabel}' from saved repos?`,
-        `This will remove '${repoLabel}' from your saved repos. The directory and its files stay on disk.`,
-        "cancel",
-      )
-      if (ok !== true) return
-      try {
-        removeSavedRepo(task.repo)
-        await props.orchestrator.setArchived(task.id, true)
-        if (selectedId() === task.id) setSelectedId(null)
-      } catch (err) {
-        // eslint-disable-next-line no-console
-        console.error("[kobe] remove saved repo failed:", err)
-      }
-      return
-    }
-    const ok = await DialogConfirm.show(
-      dialog,
-      `Delete '${task.title}'?`,
-      `Removes the worktree at ${task.worktreePath}, deletes the chat history, and removes the task. This cannot be undone. The git branch is kept.`,
-      "cancel",
-    )
-    if (ok !== true) return
-    try {
-      await props.orchestrator.deleteTask(taskId)
-      // If the deleted task was the selected one, clear selection so the
-      // chat pane / file tree etc. stop pointing at a dead worktree.
-      if (selectedId() === taskId) setSelectedId(null)
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.error("[kobe] deleteTask failed:", err)
-    }
-  }
+  // User-action handlers — every "verb that opens a dialog and calls
+  // through to the orchestrator" lives in `./lib/use-task-actions.ts`.
+  // See that hook for the new-task / rename-task / rename-chat-tab /
+  // delete-task flows.
+  const { openNewTaskFlow, confirmRenameTask, confirmRenameChatTab, confirmDeleteTask } = useTaskActions({
+    orchestrator: props.orchestrator,
+    dialog,
+    kv,
+    selectedId,
+    setSelectedId,
+    setFocusedPane,
+    savedRepos,
+  })
 
   // Centralised keymap registration. All six top-level useBindings
   // call sites used to live inline here; they were consolidated into
