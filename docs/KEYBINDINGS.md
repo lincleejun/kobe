@@ -96,3 +96,49 @@ In rough order of likelihood:
 Whenever you discover, debug, or resolve a keybinding-boundary issue. Treat it as the place a future agent / Jackson can grep for
 "why does ctrl+1 do X here but Y there." The doc is small on purpose — the goal is "every keybinding decision has a one-paragraph
 explanation findable in this file"; if a section sprawls, the underlying design is probably wrong.
+
+## Decision log
+
+### Pane focus chord — why `ctrl+hjkl`, not `ctrl+1..4`
+
+We iterated through three candidates before landing on `ctrl+hjkl`. Recording the journey here so the next agent (or Jackson) doesn't
+re-derive it.
+
+1. **`ctrl+1..4`** — first attempt, mirrors VSCode/iTerm pane focus muscle memory.
+   - **Conflict 1** (resolved): `chat.tab.pick` was registered on the same chords. Moved chat tab navigation to `ctrl+]` / `ctrl+[`
+     cycle so pane focus has hard precedence.
+   - **Conflict 2** (load-bearing): legacy terminal mode doesn't propagate the ctrl modifier on digit keys — pressing `ctrl+1`
+     just sends the byte `1`. The ctrl-digit chord requires the **CSI-u / kitty keyboard** protocol, which:
+     - opentui can request via `useKittyKeyboard: {}` on `render()`. Done.
+     - The terminal must respond to. **iTerm2 has a quirk** where ctrl+1 / ctrl+9 / ctrl+0 silently fall through to a bare digit
+       byte even with CSI-u enabled — only ctrl+2..8 emit the proper sequence.
+     - tmux must pass the sequences through with `set -g extended-keys on` (tmux ≥ 3.2) + `set -as terminal-features 'xterm*:extkeys'`.
+   - Verdict: too many config layers; ctrl+1 works for nobody by default.
+
+2. **`alt+1..4`** — second attempt. Always-works because alt+digit produces a stable two-byte `ESC<digit>` sequence in legacy mode,
+   no protocol negotiation needed.
+   - **Conflict**: macOS launchers (Raycast, Karabiner, Alfred) commonly intercept Option+digit globally before it reaches the
+     terminal. Many users (including Jackson) have alt/option/cmd entirely committed to other software.
+   - Verdict: works in theory, doesn't reach kobe in practice on heavily-customized macOS setups.
+
+3. **`ctrl+hjkl`** — final landing. ctrl+letter chords have stable C0 control byte mappings:
+   - `ctrl+h = 0x08` (BS)
+   - `ctrl+j = 0x0a` (LF)
+   - `ctrl+k = 0x0b` (VT)
+   - `ctrl+l = 0x0c` (FF)
+
+   These bytes are sent by every terminal, every tmux config, every shell — no protocol, no quirks, no setup. The chord conflicts
+   with editor commands (ctrl+h = backspace, ctrl+l = clear screen, etc.) but our `useBindings` listener sees the keypress before
+   the textarea's editor handler, and once the chord switches focus, the textarea isn't focused anymore — so the conflict never
+   manifests in practice.
+
+   `ctrl+k` was previously the command palette chord (`palette.open`). Freed and reassigned; palette moved to `ctrl+p` / `cmd+p`
+   (vscode/Cursor convention).
+
+   Mapping is positional (h/j/k/l = ordinal 1/2/3/4), not directional. The pane title's bold prefix shows the chord letter to make
+   the chord discoverable from a glance.
+
+**Lesson for the next chord-design pass**: prefer ctrl+letter over ctrl+digit / alt+digit / cmd+digit. Letters Just Work; digits
+need protocol upgrades; modifiers other than ctrl get hijacked by user-space launchers. Pick a single-modifier ctrl+letter chord
+and accept that "this conflicts with shell editor commands" is acceptable when the binding's intent is to MOVE focus AWAY from
+the input that would consume it.

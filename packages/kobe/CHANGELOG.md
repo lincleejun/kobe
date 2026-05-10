@@ -19,19 +19,131 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-05-10
+
+The chat pane gets mid-stream queue + steer, the keybinding system
+gets a proper boundary doc, and modals stop being broken at every
+viewport size. Plenty of UX polish on top.
+
+### Added
+
+- **Mid-stream submission modes** in chat. `enter` while a turn is
+  streaming queues the prompt (drained automatically when the turn
+  ends); `ctrl+enter` interrupts the in-flight subprocess and
+  dispatches the new prompt against the same session id. Mirrors
+  claude-code's `'now' / 'next' / 'later'` priority shape from the
+  refs source. Queue is rendered above the composer with a `[x]`
+  cancel chip per entry, capped at 4 visible rows + `+N more`
+  overflow.
+- **Pending approval / question pickers move into the composer
+  slot**. While `ExitPlanMode` / `AskUserQuestion` is awaiting an
+  answer, the picker renders below the chat instead of inline in
+  the transcript; once submitted, the row drops back into the
+  message list as a resolved historical entry. The composer is
+  hidden during the pending state — the picker IS the input.
+- **`docs/KEYBINDINGS.md`** — pane-scope rules, the canonical
+  overlap-resolution table, and a decision log explaining how we
+  arrived at the current chord set. Linked from `CLAUDE.md` as a
+  load-bearing read alongside HARNESS.md and PLAN.md.
+- **User-installable themes** under `~/.kobe/themes/`. Drop a
+  JSON file with the schema documented in the README; kobe merges
+  it into the theme list at boot. New `kobe theme install <path>`
+  CLI subcommand wires this up. Bundled `claude` theme as the new
+  default for fresh installs.
+- **User-pickable focus accent** color (Settings → General). The
+  ▌ marker / pane-title / focused border all read `theme.focusAccent`
+  so the focus signal reads as one visual instead of three different
+  hues across panes.
+- **Settings dialog two-level keyboard nav**: sidebar level (j/k
+  cycles General/Dev), body level (j/k cycles theme rows + the
+  transparent-bg toggle + Dev's Reset button). h/l switch level.
+  Every body row is reachable from the keyboard now — previously
+  the Transparent toggle could only be reached via the bare `t`
+  shortcut.
+- **`s` keybinding** for settings (sidebar focus). Mirrors the
+  `n` / `q` sidebar-only single-letter chord pattern. `ctrl+,`
+  still works globally.
+
+### Changed
+
+- **Pane focus chord moved from `ctrl+1..4` to `ctrl+hjkl`** (vim
+  position: h=tasks / j=workspace / k=files / l=terminal). Reason:
+  ctrl+digit needs CSI-u + tmux extended-keys + a terminal that
+  doesn't have iTerm's ctrl+1 quirk; alt+digit gets eaten by
+  macOS launchers like Raycast. ctrl+letter chords map to stable
+  C0 control bytes that every terminal sends without negotiation,
+  so the chord works for everyone with zero setup. Pane title
+  bold ordinal updated to show the chord letter (h/j/k/l).
+- **Chat tab navigation** moved from `ctrl+1..9` numeric pick to
+  `ctrl+]` / `ctrl+[` cycle (next/prev). Mirrors the sidebar's
+  `[/]` view switch and the files pane's `[/]` tab cycle for a
+  consistent bracket-pair vocabulary across panes.
+- **Files pane tabs** (All / Changes / Checks) cycle with `[/]`
+  instead of `1/2/3`. Same bracket-pair pattern.
+- **Sidebar header** renamed `kobe` → `TASKS` for parity with the
+  WORKSPACE / FILES / TERMINAL pane titles.
+- **`palette.open`** chord moved from `ctrl+k` to `ctrl+p` /
+  `cmd+p` (vscode/Cursor convention) so `ctrl+k` is free for pane
+  focus.
+- **`task.new`** chord moved from global `ctrl+n` to sidebar-scoped
+  bare `n`. **`app.quit`** moved from global `ctrl+q` /
+  `ctrl+shift+q` to sidebar-scoped bare `q`. **`focus.sidebar`**
+  (workspace-scoped `ctrl+q`) added so the user can escape from
+  the chat composer back to the task list. The sidebar's bare
+  letter chords were a long-standing UX wish; before, single-letter
+  chords would have collided with composer typing.
+- **Modals** now cap at viewport height with overflow scrolling;
+  no more F1 help dialog falling off the bottom of the terminal.
+  Default modal width bumped from 60 → 80 cols, with a new
+  `small` (50) size for confirms. New-task dialog reorganised to
+  a picker-first flow: current cwd + saved repos as the primary
+  surface, custom path input as a secondary fallback. Modals stay
+  opaque even in transparent mode.
+- **Pane title alignment**: all four pane titles sit at row 1 col 2
+  with a bold leading ordinal (h/j/k/l). Removed the `▌` focus
+  marker — the focus-tracking color on the ordinal does the same
+  job with less visual noise.
+- **Default theme** is `claude` (terracotta accent on warm
+  neutrals); existing users keep their pinned theme.
+
 ### Fixed
 
-- Single Ctrl+C no longer kills kobe. The first press copies the
-  active selection (or arms a quit, with a "Press Ctrl+C again to
-  exit" hint in the status bar); a second Ctrl+C within 1.5s exits.
-  Matches the standard TUI muscle memory used by claude-code, fish,
-  and ipython.
-- Quitting kobe (via Ctrl+C×2 or `q`) now restores the host terminal
-  cleanly — previously `process.exit(0)` skipped opentui's teardown,
-  leaving mouse tracking enabled (the host shell would receive a
-  stream of `\x1b[<…M` SGR mouse events from every cursor move) and
-  the alt-screen unrestored. The default `onQuit` now calls
-  `renderer.destroy()` first.
+- **Single Ctrl+C no longer kills kobe.** First press copies the
+  selection (or arms a quit with a "Press Ctrl+C again to exit"
+  warning chip in the status bar); second within 1.5s exits.
+  Matches claude-code / fish / ipython muscle memory.
+- **Quitting kobe restores the host terminal cleanly** — previously
+  `process.exit(0)` skipped opentui's teardown, leaving mouse
+  tracking enabled (host shell received SGR mouse events from
+  every cursor move) and alt-screen unrestored.
+- **Engine subprocess + tasks.json races**: queue dispatch now
+  serializes via a `draining` lock so concurrent drains can't
+  race on the same session id, and `pumpEvents` buffers the
+  terminal `done`/`error` event until after `engine.stop` +
+  `store.update` complete — prevents `SessionRegistry: duplicate
+  sessionId` and `ENOENT rename tasks.json.tmp` when the user
+  spam-types prompts mid-stream.
+- **Streaming cursor `▏` removed** from assistant rows — claude-code
+  itself doesn't render one and ours rendered as a stray `|` on
+  its own line. The thinking spinner above the composer is now
+  the canonical "turn in flight" affordance.
+- **Thinking spinner** moved out of the scrolling transcript and
+  pinned just above the composer (mirrors claude-code's
+  `SpinnerWithVerb` placement). No more order-jumping when the
+  list grows.
+- **Don't steal focus from the sidebar on cold boot** when the
+  workspace has a pre-pending prompt — composer focus only takes
+  over after the user actively engages with the chat.
+- **iTerm2 ctrl+1 quirk** documented in KEYBINDINGS.md (TLDR: ctrl
+  digits 1 / 9 / 0 fall through to bare bytes even with CSI-u
+  enabled). Avoided altogether by the move to ctrl+hjkl.
+
+### Distribution / Devx
+
+- Behavior tests stay local-only (need tmux + node-pty terminal
+  sizing). CI runs typecheck + unit tests + build only.
+- New `linear` agent skill + Linear CLI conventions documented for
+  team workflows.
 
 ## [0.1.1] - 2026-05-09
 
