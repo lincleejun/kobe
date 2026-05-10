@@ -1315,17 +1315,10 @@ function Shell(props: AppDeps) {
     dropPreviousFileFromPreview(currentTabs(), relPath)
     mutateTabs(id, () => ({ active: { kind: "file", path: relPath } }))
     previewApi()?.open(relPath)
-    // Opening a file from the file tree pulls focus to the workspace
-    // so the user can scroll/read with j/k without an extra ctrl+2.
-    //
-    // Deferred via queueMicrotask because the FILES pane's outer box
-    // also has an `onMouseUp` that calls `setFocusedPane("files")`.
-    // For mouse-driven opens, the row's handler fires first and the
-    // parent bubbles after — without the defer the parent's "files"
-    // call wins. Running our set in a microtask runs it AFTER the
-    // bubble finishes, so workspace is the final state. Keyboard
-    // (`enter`) opens land here too and the defer is harmless.
-    queueMicrotask(() => setFocusedPane("workspace"))
+    // Focus stays on whichever pane the user was in (typically FILES,
+    // since that's where the click/enter happened). Jackson explicitly
+    // does NOT want this to pull focus to the workspace — the open is
+    // a content swap in the centre, not a navigation.
   }
 
   function selectChatTab(): void {
