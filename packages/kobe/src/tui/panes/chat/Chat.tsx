@@ -633,26 +633,18 @@ export function Chat(props: ChatProps) {
   }
 
   // Pane-scoped keybindings: only fire when the chat pane is focused.
-  // chat.tab.pick uses `alt+1..9` so it never shadows the global
-  // `ctrl+1..4 = pane focus` chord — pane focus has hard precedence
-  // and must work the same in every pane (see docs/KEYBINDINGS.md).
-  useBindings(() => {
-    const tabsOpen = tabs().length
-    return {
-      enabled: props.focused?.() === true,
-      bindings: bindByIds({
-        "chat.tab.new": () => void newTab(),
-        "chat.tab.close": () => void closeActiveTab(),
-        "chat.tab.cycle-next": () => cycleTab(1),
-        "chat.tab.cycle-prev": () => cycleTab(-1),
-        "chat.tab.pick": (evt) => {
-          if (tabsOpen <= 1) return
-          const n = Number.parseInt(evt.name ?? "", 10)
-          if (n >= 1 && n <= Math.min(9, tabsOpen)) selectTabByIndex(n - 1)
-        },
-      }),
-    }
-  })
+  // No numeric pick — chat tabs cycle via ctrl+[/ctrl+] so ctrl+1..4
+  // is uncontested as the global pane-focus chord (see
+  // docs/KEYBINDINGS.md).
+  useBindings(() => ({
+    enabled: props.focused?.() === true,
+    bindings: bindByIds({
+      "chat.tab.new": () => void newTab(),
+      "chat.tab.close": () => void closeActiveTab(),
+      "chat.tab.cycle-next": () => cycleTab(1),
+      "chat.tab.cycle-prev": () => cycleTab(-1),
+    }),
+  }))
 
   // Spinner shows whenever a turn is in flight — independent of how
   // many assistant rows already exist. Earlier this was gated on

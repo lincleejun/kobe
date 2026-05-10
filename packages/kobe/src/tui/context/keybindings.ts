@@ -388,30 +388,27 @@ export const KobeKeymap: readonly KobeBinding[] = [
     description: "Close chat tab",
   },
   {
+    // `ctrl+]` cycles forward, `ctrl+[` cycles backward — bracket
+    // pair mirrors the sidebar's `[/]` view switcher and the files
+    // pane's `[/]` tab cycler so the bracket-pair pattern is
+    // consistent across panes. The earlier `ctrl+tab` /
+    // `ctrl+shift+tab` chord is dropped: `tab` is the global
+    // pane-cycle (focus.next) and the ctrl-prefixed variant felt
+    // collision-prone.
     id: "chat.tab.cycle-next",
     scope: "workspace",
-    keys: ["ctrl+tab"],
+    keys: ["ctrl+]"],
     category: "Workspace",
     description: "Next chat tab",
+    hint: { keys: "ctrl+]", label: "next tab" },
   },
   {
     id: "chat.tab.cycle-prev",
     scope: "workspace",
-    keys: ["ctrl+shift+tab"],
+    keys: ["ctrl+["],
     category: "Workspace",
     description: "Previous chat tab",
-  },
-  {
-    // Use `alt+N` (NOT `ctrl+N`) — ctrl+1..4 is reserved for the
-    // global focus.numeric (pane focus) and was being shadowed in
-    // workspace + multi-tab. alt+1..9 stays out of focus.numeric's
-    // way and out of composer typing (alt-prefixed chords don't
-    // produce printable input).
-    id: "chat.tab.pick",
-    scope: "workspace",
-    keys: ["alt+1", "alt+2", "alt+3", "alt+4", "alt+5", "alt+6", "alt+7", "alt+8", "alt+9"],
-    category: "Workspace",
-    description: "Pick chat tab N (alt+1..9 when >1 tab open)",
+    hint: { keys: "ctrl+[", label: "prev tab" },
   },
 
   // ─── Files ────────────────────────────────────────────────────────────
