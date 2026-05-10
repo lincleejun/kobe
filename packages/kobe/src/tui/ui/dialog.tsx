@@ -44,6 +44,12 @@ export function Dialog(
     return 60
   }
 
+  // Vertical headroom around the card so it never lands flush against
+  // the terminal's top/bottom edge — leaves room for the host shell's
+  // status line, tmux pane labels, etc.
+  const VERTICAL_MARGIN = 2
+  const maxCardHeight = () => Math.max(8, dimensions().height - VERTICAL_MARGIN * 2)
+
   return (
     <box
       onMouseDown={() => {
@@ -59,9 +65,15 @@ export function Dialog(
       width={dimensions().width}
       height={dimensions().height}
       alignItems="center"
+      // Vertically center the card. The previous design used
+      // `paddingTop = viewport/4`, which pushed tall cards (the
+      // F1 keybinding help, settings) off the bottom of the terminal.
+      // `justifyContent="center"` lets short cards float at center
+      // and tall cards sit at top with their max-height clipped to
+      // `maxCardHeight()` (see below) so they never overflow.
+      justifyContent="center"
       position="absolute"
       zIndex={3000}
-      paddingTop={Math.floor(dimensions().height / 4)}
       left={0}
       top={0}
       backgroundColor={RGBA.fromInts(0, 0, 0, 150)}
@@ -73,6 +85,8 @@ export function Dialog(
         }}
         width={width()}
         maxWidth={dimensions().width - 2}
+        maxHeight={maxCardHeight()}
+        flexShrink={1}
         // Modals stay opaque even in transparent mode — the user's
         // terminal can show through the page panels (sidebar / chat
         // background), but a dialog's content needs a solid surface
@@ -81,7 +95,22 @@ export function Dialog(
         backgroundColor={theme.backgroundDialog}
         paddingTop={1}
       >
-        {props.children}
+        {/* Inner scrollbox — content taller than `maxCardHeight()`
+            scrolls with mouse wheel + arrow keys instead of overflowing
+            off the bottom of the terminal. Short content sits at the
+            top with no visible scrollbar. Every dialog body inherits
+            this behaviour, so individual dialogs (HelpDialog,
+            SettingsDialog, etc.) don't need to handle overflow
+            themselves. */}
+        <scrollbox
+          flexShrink={1}
+          stickyScroll={false}
+          verticalScrollbarOptions={{
+            trackOptions: { backgroundColor: theme.backgroundDialog, foregroundColor: theme.borderActive },
+          }}
+        >
+          {props.children}
+        </scrollbox>
       </box>
     </box>
   )
