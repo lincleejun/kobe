@@ -58,6 +58,7 @@
  */
 
 import { type Accessor, createSignal } from "solid-js"
+import { resolveDefaultModelId } from "../tui/panes/chat/composer/claude-settings.ts"
 import type {
   AIEngine,
   AskQuestionEntry,
@@ -67,11 +68,18 @@ import type {
   OrchestratorEvent,
   QuestionOption,
   SessionHandle,
+  SessionMeta,
   UserInputPayload,
   UserInputResponse,
 } from "../types/engine.ts"
-import type { ChatTab, PermissionMode, Task, TaskId, TaskStatus } from "../types/task.ts"
-import { resolveDefaultModelId } from "../tui/panes/chat/composer/claude-settings.ts"
+import {
+  type ChatTab,
+  type PermissionMode,
+  type Task,
+  type TaskId,
+  type TaskStatus,
+  nextChatTabSeq,
+} from "../types/task.ts"
 import type { TaskIndexStore, TaskIndexUnsubscribe } from "./index/store.ts"
 import { ulid } from "./index/ulid.ts"
 import { MetadataSuggester } from "./metadata-suggester.ts"
@@ -95,7 +103,7 @@ export interface OrchestratorDeps {
 }
 
 /** Maximum simultaneous `in_progress` tasks. From DESIGN §11.5. */
-export const CONCURRENCY_CAP = 4
+export const CONCURRENCY_CAP = 20
 
 /**
  * Placeholder label used when the user creates a task without typing a
@@ -210,6 +218,29 @@ export interface CreateTaskInput {
 export type Unsubscribe = () => void
 
 /**
+ * Live engine state for one chat tab, derived from the per-tab handles
+ * map and the pending-input bucket. Surfaced reactively via
+ * {@link Orchestrator.chatRunStateSignal} so the workspace tab strip can
+ * paint a status dot per chat-tab chip (green = streaming, yellow =
+ * paused on `AskUserQuestion` / `ExitPlanMode`, absent = idle).
+ *
+ * Per-tab fidelity matters: a task with two tabs where tab A is asking
+ * the user a question and tab B is still streaming should show yellow
+ * on A and green on B simultaneously — task-level aggregation would
+ * mask the distinction.
+ */
+export type ChatRunState = "running" | "awaiting_input" | "idle"
+
+/**
+ * Compose the composite key used by {@link Orchestrator.chatRunStateSignal}
+ * so callers don't need to know that the underlying shape is
+ * `${taskId}:${tabId}`. Mirrors the private {@link tabKey} helper.
+ */
+export function chatRunStateKey(taskId: string, tabId: string): string {
+  return `${taskId}:${tabId}`
+}
+
+/**
  * Composite (taskId, tabId) key for the engine's per-tab handle, the
  * subscriber bus, and the pump map. Centralised so all three keep the
  * same shape and a typo doesn't silently split a tab's stream from its
@@ -287,6 +318,15 @@ export class Orchestrator {
    * user answers. Not persisted — request state is per-process.
    */
   private readonly pendingInput = new Map<TaskId, Map<string, UserInputPayload>>()
+  /**
+   * Side index from `requestId` to the composite tabKey of the chat tab
+   * that fired the pause. The main `pendingInput` map is keyed at the
+   * task level (see comment above), but the run-state dot needs per-tab
+   * attribution so a multi-tab task can show yellow on the asking tab
+   * and green on a sibling that's still streaming. Cleared in lockstep
+   * with the bucket entries in `respondToInput`.
+   */
+  private readonly pendingInputRequestTab = new Map<string, string>()
   /** Counter for generating unique requestIds across the orchestrator's lifetime. */
   private requestIdCounter = 0
   /**
@@ -301,6 +341,16 @@ export class Orchestrator {
   private readonly tasksAcc: Accessor<Task[]>
   private readonly setTasks: (next: Task[]) => void
   private readonly unsubscribeStore: TaskIndexUnsubscribe
+
+  /**
+   * Reactive map of `${taskId}:${tabId}` → live engine state. Computed
+   * lazily from `handles` + `pendingInputRequestTab` and bumped via
+   * {@link bumpRunState} every time those mutate. The workspace tab
+   * strip reads this through {@link chatRunStateSignal} to paint a
+   * per-chat-tab status dot.
+   */
+  private readonly runStateAcc: Accessor<ReadonlyMap<string, ChatRunState>>
+  private readonly setRunState: (next: ReadonlyMap<string, ChatRunState>) => void
 
   constructor(deps: OrchestratorDeps) {
     this.engine = deps.engine
@@ -325,6 +375,47 @@ export class Orchestrator {
     this.unsubscribeStore = this.store.subscribe((snapshot) => {
       this.setTasks(snapshot.slice())
     })
+
+    // Run-state signal. Seeds empty (no live tabs at construction time);
+    // every handle / pendingInput mutation calls `bumpRunState` to
+    // recompute. Solid compares by reference, so the bump always
+    // allocates a fresh Map.
+    const [runState, setRunState] = createSignal<ReadonlyMap<string, ChatRunState>>(new Map())
+    this.runStateAcc = runState
+    this.setRunState = (next) => setRunState(() => next)
+  }
+
+  /**
+   * Recompute the per-tab run-state map from `handles` +
+   * `pendingInputRequestTab` and push it into the signal. Cheap (one
+   * Map allocation, one signal write); call sites are every place
+   * those collections mutate.
+   *
+   * Priority: `awaiting_input` > `running` > absent (idle). A tab that
+   * just fired an `AskUserQuestion` always shows yellow even though
+   * `engine.stop` clears its handle within the same turn — the dot
+   * tracks the user's mental model (waiting on me) rather than the
+   * subprocess's.
+   */
+  private bumpRunState(): void {
+    const next = new Map<string, ChatRunState>()
+    for (const tabKey of this.pendingInputRequestTab.values()) {
+      next.set(tabKey, "awaiting_input")
+    }
+    for (const key of this.handles.keys()) {
+      if (!next.has(key)) next.set(key, "running")
+    }
+    this.setRunState(next)
+  }
+
+  /**
+   * Reactive accessor for per-tab run-state. Returns a map keyed by
+   * `${taskId}:${tabId}` (compose via {@link chatRunStateKey}); absence
+   * == idle. Wired to the workspace tab strip so each chat-tab chip can
+   * paint a live dot (green = streaming, yellow = awaiting input).
+   */
+  chatRunStateSignal(): Accessor<ReadonlyMap<string, ChatRunState>> {
+    return this.runStateAcc
   }
 
   /** Solid `Accessor` that yields the current task list. */
@@ -576,6 +667,40 @@ export class Orchestrator {
   }
 
   /**
+   * Replace the auto-derived sidebar title with a claude-suggested one
+   * via a one-shot `claude -p` call. Runs in the background — failures
+   * are swallowed.
+   *
+   * Skips the upgrade when the title isn't the truncate-derived form
+   * of `prompt`: that means either an explicit title from createTask
+   * or a manual rename via `r`, both of which we treat as load-bearing
+   * user intent. Re-reads the task after the suggestion lands and
+   * skips again if the title shifted while we were waiting (the user
+   * renamed it mid-flight).
+   */
+  private async maybeUpgradeTitle(taskId: TaskId, prompt: string): Promise<void> {
+    if (!prompt || prompt.trim().length === 0) return
+    const task = this.store.get(taskId)
+    if (!task) return
+    const derived = deriveTitleFromPrompt(prompt)
+    if (!derived) return
+    // Only upgrade titles we ourselves wrote from this prompt. An
+    // explicit createTask({title}) or sidebar `r` rename will land
+    // here with task.title !== derived, and we leave it alone.
+    if (task.title !== derived) return
+
+    const suggested = await this.metadataSuggester.suggestTitle(prompt)
+    if (!suggested) return
+    if (suggested === derived) return
+
+    const fresh = this.store.get(taskId)
+    if (!fresh) return
+    if (fresh.title !== derived) return // user renamed while we waited
+
+    await this.store.update(taskId, { title: suggested })
+  }
+
+  /**
    * Run a task. First call spawns; subsequent calls (or calls with a
    * `sessionId` already on the task) resume.
    *
@@ -679,8 +804,16 @@ export class Orchestrator {
         const derived = deriveTitleFromPrompt(prompt)
         if (derived) await this.store.update(task.id, { title: derived })
       }
+      // Background: ask claude for a tighter sidebar title to replace
+      // the truncate-derived one. Fire-and-forget; the rename method
+      // bails out if the user manually rewrote the title in the
+      // meantime, so this never stomps an explicit choice.
+      if (prompt && prompt.trim().length > 0) {
+        void this.maybeUpgradeTitle(task.id, prompt)
+      }
     }
     this.handles.set(key, handle)
+    this.bumpRunState()
 
     if (task.status !== "in_progress") {
       await this.store.update(task.id, { status: "in_progress" })
@@ -789,6 +922,8 @@ export class Orchestrator {
     if (!pending || !bucket) return
     bucket.delete(requestId)
     if (bucket.size === 0) this.pendingInput.delete(task.id)
+    this.pendingInputRequestTab.delete(requestId)
+    this.bumpRunState()
 
     // Tell the chat the row is no longer pending. Fire BEFORE the
     // synthetic user.inject so the approval banner flips to its final
@@ -854,6 +989,7 @@ export class Orchestrator {
       await this.engine.stop(handle)
     } finally {
       this.handles.delete(key)
+      this.bumpRunState()
     }
   }
 
@@ -1059,6 +1195,7 @@ export class Orchestrator {
         // eslint-disable-next-line no-console
         console.error(`[kobe orchestrator] deleteTask: pauseTask failed for ${task.id}:`, err)
         this.handles.delete(task.id)
+        this.bumpRunState()
       }
     }
 
@@ -1109,6 +1246,62 @@ export class Orchestrator {
   }
 
   /**
+   * List every persisted Claude Code session for a task's worktree.
+   *
+   * Powers the resume-picker (`chat.session.resume`). The engine scans
+   * `~/.claude/projects/<encoded-cwd>/*.jsonl` directly — kobe keeps no
+   * parallel index, so a session opened by raw `claude --resume` outside
+   * kobe still appears.
+   *
+   * Returns `[]` if the engine errors (so the picker shows a clean
+   * "no sessions yet" state instead of a toast).
+   */
+  async listSessions(id: TaskId | string): Promise<SessionMeta[]> {
+    const task = this.requireTask(id)
+    if (!task.worktreePath) return []
+    try {
+      return await this.engine.listSessions(task.worktreePath)
+    } catch {
+      return []
+    }
+  }
+
+  /**
+   * Open `sessionId` in the chat shell as the active conversation.
+   *
+   * Behavior:
+   *   - If the task already has a tab whose `sessionId` matches, just
+   *     activate that tab. (No duplicate hydration; the existing tab
+   *     already has the message history loaded.)
+   *   - Otherwise, append a new tab whose `sessionId` is pre-seeded —
+   *     done in a single `store.update` so Chat.tsx's reactive subscribe
+   *     loop sees the tab with its sessionId set on first observation
+   *     and fires `readHistory` automatically. (createTab→updateTab in
+   *     two steps would race: the first observation would see
+   *     sessionId=null and skip history hydration.)
+   *
+   * Returns the (existing or new) tab id so the UI can `setActiveTab`
+   * after dismissing the picker dialog.
+   */
+  async openSessionInTab(id: TaskId | string, sessionId: string, opts: { title?: string } = {}): Promise<string> {
+    const task = this.requireTask(id)
+    const existing = task.tabs.find((t) => t.sessionId === sessionId)
+    if (existing) {
+      await this.setActiveTab(task.id, existing.id)
+      return existing.id
+    }
+    const tab: ChatTab = {
+      id: ulid(),
+      sessionId,
+      seq: nextChatTabSeq(task.tabs),
+      createdAt: new Date().toISOString(),
+      ...(opts.title ? { title: opts.title } : {}),
+    }
+    await this.store.update(task.id, { tabs: [...task.tabs, tab], activeTabId: tab.id })
+    return tab.id
+  }
+
+  /**
    * Subscribe to events for one task. Returns an unsubscribe
    * function. Multiple subscribers are supported; events are
    * broadcast in registration order. Subscribers receive engine
@@ -1156,6 +1349,7 @@ export class Orchestrator {
     const tab: ChatTab = {
       id: ulid(),
       sessionId: null,
+      seq: nextChatTabSeq(task.tabs),
       createdAt: new Date().toISOString(),
       ...(opts.title ? { title: opts.title } : {}),
     }
@@ -1275,6 +1469,7 @@ export class Orchestrator {
       await this.engine.stop(handle)
     } finally {
       this.handles.delete(key)
+      this.bumpRunState()
     }
   }
 
@@ -1297,6 +1492,7 @@ export class Orchestrator {
       }
       this.handles.delete(key)
     }
+    this.bumpRunState()
   }
 
   private countRunning(): number {
@@ -1349,6 +1545,11 @@ export class Orchestrator {
             this.pendingInput.set(taskId, bucket)
           }
           bucket.set(requestId, inputReq)
+          // Record the firing tab so the run-state dot can attribute
+          // the pause to the right chat-tab chip. Cleared in lockstep
+          // with the bucket entry in respondToInput.
+          this.pendingInputRequestTab.set(requestId, key)
+          this.bumpRunState()
           this.dispatchEvent(taskId, tabId, {
             type: "user_input.request",
             requestId,
@@ -1397,6 +1598,7 @@ export class Orchestrator {
       // Drop the handle whether we exited cleanly or via throw.
       this.handles.delete(key)
       this.pumps.delete(key)
+      this.bumpRunState()
       const terminal = terminalEvent?.type === "error" ? "error" : terminalEvent ? "done" : null
       if (terminal && !killedForInput) {
         // Only flip the task's status to a terminal value when ALL

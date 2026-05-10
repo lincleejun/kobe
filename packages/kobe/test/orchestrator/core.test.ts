@@ -42,6 +42,7 @@ import {
   renderUserInputResponsePrompt,
 } from "../../src/orchestrator/core.ts"
 import { TaskIndexStore } from "../../src/orchestrator/index/store.ts"
+import { MetadataSuggester } from "../../src/orchestrator/metadata-suggester.ts"
 import { GitWorktreeManager } from "../../src/orchestrator/worktree/manager.ts"
 import { worktreePathFor } from "../../src/orchestrator/worktree/paths.ts"
 import type { AIEngine, EngineEvent, OrchestratorEvent, SessionHandle, SpawnOpts } from "../../src/types/engine.ts"
@@ -551,6 +552,9 @@ describe("Orchestrator.deleteTask", () => {
         return []
       },
       async deleteHistory() {},
+      async listSessions() {
+        return []
+      },
       async stop() {
         throw new Error("simulated stuck engine")
       },
@@ -665,6 +669,9 @@ describe("Orchestrator.runTask on a main task", () => {
         return []
       },
       async deleteHistory() {},
+      async listSessions() {
+        return []
+      },
       async stop() {},
     }
     const { orch } = await buildOrchestrator(stub)
@@ -817,6 +824,75 @@ describe("Orchestrator.setTitle", () => {
 })
 
 // ----------------------------------------------------------------------
+// maybeUpgradeTitle — background `claude -p` upgrade of the
+// truncate-derived title on first run. Mirrors the branch-rename flow
+// but for the sidebar label. The contract under test:
+//   1. truncate-derived title gets replaced by the suggester's output
+//   2. an explicit createTask({title}) is treated as load-bearing user
+//      intent and is NEVER overwritten
+// ----------------------------------------------------------------------
+
+async function buildOrchestratorWithSuggester(suggested: string | null): Promise<{
+  orch: Orchestrator
+  store: TaskIndexStore
+  fake: FakeAIEngine
+}> {
+  const store = new TaskIndexStore({ homeDir })
+  await store.load()
+  const worktrees = new GitWorktreeManager()
+  const suggester = new MetadataSuggester()
+  // Override the per-method probe so the test never reaches `claude -p`.
+  // We don't stub resolveBinary directly because it's private; replacing
+  // the public method is enough — the orchestrator only calls these.
+  ;(suggester as unknown as { suggestTitle: (p: string) => Promise<string | null> }).suggestTitle = async () =>
+    suggested
+  ;(suggester as unknown as { suggestBranchSlug: (p: string) => Promise<string | null> }).suggestBranchSlug =
+    async () => null
+  const fake = new FakeAIEngine()
+  const orch = new Orchestrator({ engine: fake, store, worktrees, metadataSuggester: suggester })
+  return { orch, store, fake }
+}
+
+describe("Orchestrator.maybeUpgradeTitle", () => {
+  test("replaces the truncate-derived title with the claude suggestion on first run", async () => {
+    const { orch, store, fake } = await buildOrchestratorWithSuggester("Fix login redirect")
+    fake.script("fake-1", [{ type: "done" }])
+    const t = await orch.createTask({ repo, prompt: "fix login redirect please" })
+    // createTask path: title comes from deriveTitleFromPrompt.
+    expect(store.get(t.id)?.title).toBe("fix login redirect please")
+    await orch.runTask(t.id, "fix login redirect please")
+    await orch._waitForPumpsIdle()
+    // The upgrade is fire-and-forget after engine.spawn resolves; flush
+    // microtasks so the chained store.update settles before we assert.
+    await new Promise((r) => setImmediate(r))
+    expect(store.get(t.id)?.title).toBe("Fix login redirect")
+  })
+
+  test("does not overwrite an explicit createTask title", async () => {
+    const { orch, store, fake } = await buildOrchestratorWithSuggester("Suggested label")
+    fake.script("fake-1", [{ type: "done" }])
+    const t = await orch.createTask({ repo, title: "manual title", prompt: "fix login redirect please" })
+    expect(store.get(t.id)?.title).toBe("manual title")
+    await orch.runTask(t.id, "fix login redirect please")
+    await orch._waitForPumpsIdle()
+    await new Promise((r) => setImmediate(r))
+    // The suggester returned a value but the title is user-set — guard
+    // holds, no rewrite.
+    expect(store.get(t.id)?.title).toBe("manual title")
+  })
+
+  test("leaves the title untouched when the suggester returns null", async () => {
+    const { orch, store, fake } = await buildOrchestratorWithSuggester(null)
+    fake.script("fake-1", [{ type: "done" }])
+    const t = await orch.createTask({ repo, prompt: "fix login redirect please" })
+    await orch.runTask(t.id, "fix login redirect please")
+    await orch._waitForPumpsIdle()
+    await new Promise((r) => setImmediate(r))
+    expect(store.get(t.id)?.title).toBe("fix login redirect please")
+  })
+})
+
+// ----------------------------------------------------------------------
 // createTask — baseRef forwarding (new-task dialog "from branch" field)
 // ----------------------------------------------------------------------
 
@@ -923,6 +999,9 @@ describe("Orchestrator engine call shape", () => {
         return []
       },
       async deleteHistory() {},
+      async listSessions() {
+        return []
+      },
       async stop() {},
     }
     const { orch } = await buildOrchestrator(stub)

@@ -252,7 +252,7 @@ export class TaskIndexStore {
       activeTabId = activeIn && tabsIn.some((t) => t.id === activeIn) ? activeIn : (tabsIn[0]?.id ?? "")
     } else {
       const tabId = ulid()
-      tabs = [{ id: tabId, sessionId: sessionId ?? null, createdAt: now }]
+      tabs = [{ id: tabId, sessionId: sessionId ?? null, seq: 1, createdAt: now }]
       activeTabId = tabId
     }
     const firstSession = tabs[0]?.sessionId ?? null
@@ -478,15 +478,26 @@ function coerceTask(value: unknown): Task | null {
   let tabs: ChatTab[] | null = null
   if (rawTabs) {
     tabs = []
+    let nextSeqForMissing = 1
     for (const t of rawTabs) {
       if (!t || typeof t !== "object") continue
       const tt = t as Record<string, unknown>
       if (typeof tt.id !== "string") continue
       if (!(tt.sessionId === null || typeof tt.sessionId === "string")) continue
       if (typeof tt.createdAt !== "string") continue
+      // Legacy manifests (pre-seq) lack `seq`. Assign by position so
+      // the first tab in the saved array becomes seq=1, etc. Once
+      // persisted on next save the field is sticky and no longer
+      // dependent on array order.
+      const persistedSeq = typeof tt.seq === "number" && Number.isFinite(tt.seq) && tt.seq > 0 ? tt.seq : null
+      const seq = persistedSeq ?? nextSeqForMissing++
+      if (persistedSeq !== null && persistedSeq >= nextSeqForMissing) {
+        nextSeqForMissing = persistedSeq + 1
+      }
       const tab: ChatTab = {
         id: tt.id,
         sessionId: (tt.sessionId as string | null) ?? null,
+        seq,
         createdAt: tt.createdAt,
         ...(typeof tt.title === "string" ? { title: tt.title } : {}),
       }
@@ -505,7 +516,7 @@ function coerceTask(value: unknown): Task | null {
     // reuse the task's createdAt as the tab's createdAt — for migrated
     // tasks the tab effectively was-created when the task was.
     const synthesizedId = ulid()
-    finalTabs = [{ id: synthesizedId, sessionId: legacySessionId, createdAt: v.createdAt }]
+    finalTabs = [{ id: synthesizedId, sessionId: legacySessionId, seq: 1, createdAt: v.createdAt }]
     finalActive = synthesizedId
   }
 
