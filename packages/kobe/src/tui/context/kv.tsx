@@ -78,15 +78,34 @@ export const { use: useKV, provider: KVProvider } = createSimpleContext({
         scheduleWrite()
       },
       /**
-       * Wipe every persisted key and immediately schedule a write of
-       * the now-empty store. Used by the Dev settings panel's "reset
-       * UI state" affordance — drops persisted task selection, center
-       * tabs, pane sizes, etc., reverting kobe to a fresh-launch
-       * layout without touching `~/.kobe/tasks.json`.
+       * Wipe every persisted key and synchronously flush the now-empty
+       * store to disk. Used by the Dev settings panel's "reset UI
+       * state" affordance.
+       *
+       * The write MUST be synchronous (not the usual debounce): the
+       * caller exits the kobe process immediately after — without an
+       * eager flush, the 250ms timer is racy against any stray
+       * `kv.set` from a persistence effect that fires before exit, and
+       * the on-disk file ends up partially repopulated. We also can't
+       * rely on the in-memory Solid signals being reset, since `clear`
+       * only knows about KV keys; the post-reset relaunch is what
+       * brings the rest of the UI back to defaults.
        */
       clear() {
         for (const k of Object.keys(store)) setStore(k, undefined as unknown)
-        scheduleWrite()
+        if (writeTimer) {
+          clearTimeout(writeTimer)
+          writeTimer = null
+        }
+        try {
+          mkdirSync(dirname(STATE_PATH), { recursive: true })
+          const tmp = `${STATE_PATH}.tmp`
+          writeFileSync(tmp, JSON.stringify(store, null, 2), "utf8")
+          renameSync(tmp, STATE_PATH)
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.error("[kobe] kv clear write failed:", err)
+        }
       },
     }
     return result

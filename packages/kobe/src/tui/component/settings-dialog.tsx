@@ -8,9 +8,13 @@
  *     mode, etc.).
  *   - Dev    — affordances for development / debugging only. Currently
  *     hosts a "Reset UI state" button that wipes the KV store
- *     (`~/.config/kobe/state.json`). Tasks are NOT touched — those
- *     live in `~/.kobe/tasks.json` and need a separate, more
- *     destructive verb that we deliberately don't expose yet.
+ *     (`~/.config/kobe/state.json`) AND the task index
+ *     (`~/.kobe/tasks.json`), then quits kobe so the user relaunches
+ *     into a fresh in-memory state. Without exit, the persistence
+ *     effects in app.tsx silently repopulate state.json from live
+ *     Solid signals on the next change (KOB-12). Worktrees on disk
+ *     are deliberately NOT touched — the branches still hold the
+ *     user's work; they can clean up manually if they want.
  *
  * Bindings inside the dialog:
  *   - `↑` / `↓` — navigate the section sidebar.
@@ -20,7 +24,11 @@
  */
 
 import { TextAttributes } from "@opentui/core"
+import { useRenderer } from "@opentui/solid"
+import { unlinkSync } from "node:fs"
+import { join } from "node:path"
 import { For, Show, createMemo, createSignal } from "solid-js"
+import { homeDir } from "../../env"
 import type { KVContext } from "../context/kv"
 import { FOCUS_ACCENT_SLOTS, type FocusAccentSlot, useTheme } from "../context/theme"
 import { useBindings } from "../lib/keymap"
@@ -48,6 +56,7 @@ export type SettingsDialogProps = {
 export function SettingsDialog(props: SettingsDialogProps) {
   const dialog = useDialog()
   const themeCtx = useTheme()
+  const renderer = useRenderer()
   const { theme } = themeCtx
   // Two-level navigation:
   //   - `level === "sidebar"` — left column owns the cursor; j/k cycles
@@ -127,21 +136,63 @@ export function SettingsDialog(props: SettingsDialogProps) {
     setBodyRow(0)
   }
 
-  // Confirm before wiping KV — the user explicitly asked for it but
-  // it's still destructive (drops their persisted layout, last-selected
-  // task, etc.) and a stray enter on the row shouldn't blow it away.
+  // Confirm before wiping kobe-owned state — the user explicitly asked
+  // for it but it's still destructive (drops persisted layout, the
+  // task list, etc.) and a stray enter on the row shouldn't blow it
+  // away.
+  //
+  // Reset is "wipe + relaunch" rather than "wipe + snap defaults in
+  // place": kv.clear() only resets the on-disk KV store, not the live
+  // Solid signals (selectedId, pane widths, themeCtx's internal store,
+  // tabsByTask, etc.) that get persisted into KV by the createEffect
+  // batch in app.tsx. Without exit, those effects refire on the next
+  // signal change and silently repopulate state.json. Restarting kobe
+  // is the simplest way to drop every in-memory cache to defaults
+  // without inventing a fragile per-signal reset registry. See KOB-12.
+  //
+  // Scope of "wipe":
+  //   ✓ ~/.config/kobe/state.json — KV (theme, pane sizes, tab state).
+  //   ✓ ~/.kobe/tasks.json — task index. Working session and Archive
+  //     lists are visible UI state, so they have to clear too;
+  //     otherwise the user opens reset, restarts, and the lists are
+  //     unchanged. TaskIndexStore.load handles ENOENT cleanly.
+  //   ✗ Worktree directories on disk — Jackson explicitly excluded
+  //     these. The user can recover work from the branches manually.
+  //   ✗ Claude Code session JSONLs in ~/.claude/projects/ — those are
+  //     Claude Code's own data, not kobe-owned. Out of scope.
+  //   ✗ User-installed themes in ~/.kobe/themes/ — user content, not
+  //     auto-deletable.
   async function confirmReset(): Promise<void> {
     const ok = await DialogConfirm.show(
       dialog,
       "Reset UI state?",
-      "Wipes ~/.config/kobe/state.json — drops last selected task, open chat tabs, pane sizes, last new-task repo, model picks. Tasks themselves (~/.kobe/tasks.json) are NOT touched.",
+      "Wipes ~/.config/kobe/state.json and ~/.kobe/tasks.json, then quits kobe — relaunch for a fresh start with empty Working session / Archive lists. Worktrees on disk and Claude Code session history are NOT touched.",
       "cancel",
     )
     if (ok !== true) return
     props.kv.clear()
-    // Close the settings dialog too — the layout is about to snap to
-    // defaults, no point leaving it open.
-    props.onClose()
+    try {
+      unlinkSync(join(homeDir(), ".kobe", "tasks.json"))
+    } catch (err) {
+      // ENOENT just means the index was never created (first-launch
+      // reset, hermetic test boot). Anything else is worth surfacing
+      // for the user before we exit.
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+        // eslint-disable-next-line no-console
+        console.error("kobe: failed to delete tasks.json during reset:", err)
+      }
+    }
+    // Tear down the renderer first so the alt-screen exit / mouse
+    // tracking disable sequences flush before process.exit blocks
+    // Node — same pattern as the global `app.quit` handler.
+    try {
+      renderer?.destroy()
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error("kobe: renderer.destroy() failed during reset:", err)
+    }
+    process.stderr.write("kobe: UI state reset. Relaunch kobe to start fresh.\n")
+    process.exit(0)
   }
 
   useBindings(() => ({
@@ -413,8 +464,9 @@ export function SettingsDialog(props: SettingsDialogProps) {
                 Reset UI state
               </text>
               <text fg={theme.textMuted} wrapMode="word">
-                Clears ~/.config/kobe/state.json — pane sizes, last selected task, open chat tabs, model picks. Tasks
-                themselves are not touched.
+                Clears ~/.config/kobe/state.json and ~/.kobe/tasks.json, then quits kobe — relaunch to start fresh.
+                Working session / Archive lists, pane sizes, theme, model picks all reset. Worktrees on disk and Claude
+                Code session history are not touched.
               </text>
               {/* Same row-cursor pattern as General's body rows — when
                   the body level owns the cursor, this row paints in
