@@ -49,6 +49,7 @@ import { loadUserThemes } from "./context/theme/loader"
 import { useAppKeymap } from "./app-keymap"
 import { usePaneSizes } from "./lib/use-pane-sizes"
 import { useTaskActions } from "./lib/use-task-actions"
+import { useTestSideChannel } from "./lib/use-test-side-channel"
 import { useThemePersistence } from "./lib/use-theme-persistence"
 import { useWorkspaceTabs } from "./lib/use-workspace-tabs"
 import { Chat } from "./panes/chat/Chat"
@@ -337,69 +338,14 @@ function Shell(props: AppDeps) {
     activeTask,
   })
 
-  // Side-channel PR trigger for the W4.PR behavior test. When
-  // KOBE_TEST_FAKE_PORT is active, the fake-engine HTTP server (started
-  // in startApp) also exposes POST /pr which calls requestPR for the
-  // active task. The test uses this in preference to keystroke-driven
-  // invocation because key dispatch interacts with the focused
-  // composer's keymap in ways the test shouldn't have to debug. We
-  // expose the trigger via a global window-attached function so the
-  // server (defined at startApp time, before Shell mounts) can reach it.
-  if (typeof globalThis !== "undefined") {
-    ;(globalThis as { __kobeTestRequestPR?: () => Promise<{ taskId: string; prompt: string }> }).__kobeTestRequestPR =
-      async () => {
-        const task = activeTask()
-        if (!task || !task.worktreePath || task.status === "canceled") {
-          throw new Error("no usable active task for PR (no worktree, no task, or canceled)")
-        }
-        // Render the prompt OUTSIDE of requestPR so the test can assert
-        // on what was actually sent. This duplicates a tiny bit of logic
-        // for the test affordance only — production goes through
-        // requestPR which independently renders + sends.
-        const { gatherPRState, loadPRInstructionsTemplate, renderPRInstructions } = await import(
-          "../orchestrator/pr/index.ts"
-        )
-        const state = await gatherPRState(task.worktreePath)
-        const template = await loadPRInstructionsTemplate(task.worktreePath)
-        const rendered = renderPRInstructions(template, state)
-        await props.orchestrator.requestPR(task.id)
-        return { taskId: task.id, prompt: rendered }
-      }
-
-    // Side-channel respond trigger for the user-input pause behavior
-    // tests (ExitPlanMode + AskUserQuestion). The chat row's
-    // mouse-click path through onApprove/onAnswer eventually calls
-    // orchestrator.respondToInput, but driving that from a PTY test
-    // requires SGR mouse delivery the screen-capture path doesn't
-    // honor. We expose a server-side hook that picks the latest
-    // pending requestId for the active task and dispatches the
-    // user's response synthetically. The render side (status flip on
-    // the picker, composer unlock, synthetic user.inject row) is the
-    // same code path real clicks would exercise — only the
-    // input-event delivery differs.
-    type RespondTrigger = (
-      response: import("../types/engine.ts").UserInputResponse,
-    ) => Promise<{ taskId: string; requestId: string; prompt: string }>
-    ;(globalThis as { __kobeTestRespondToInput?: RespondTrigger }).__kobeTestRespondToInput = async (response) => {
-      const task = activeTask()
-      if (!task) throw new Error("no active task for respondToInput")
-      const pending = props.orchestrator.peekPendingInput(task.id)
-      if (pending.length === 0) {
-        throw new Error("no pending input for active task — picker hasn't rendered yet?")
-      }
-      // Latest request wins. Multiple pending requests on one task is
-      // not currently a real flow (the orchestrator kills the
-      // subprocess on the first user-input tool start), but if it
-      // becomes one the test can extend the seam with an explicit
-      // requestId selector.
-      const latest = pending[pending.length - 1]
-      if (!latest) throw new Error("no pending input for active task — picker hasn't rendered yet?")
-      const { renderUserInputResponsePrompt } = await import("../orchestrator/core.ts")
-      const prompt = renderUserInputResponsePrompt(latest.payload, response)
-      await props.orchestrator.respondToInput(task.id, latest.requestId, response)
-      return { taskId: task.id, requestId: latest.requestId, prompt }
-    }
-  }
+  // Behavior-test side-channel — mounts globals on `globalThis` that
+  // the fake-engine HTTP server reads at request time. See
+  // `./lib/use-test-side-channel.ts` for the two globals
+  // (__kobeTestRequestPR + __kobeTestRespondToInput) and why we route
+  // PR/respondToInput through them instead of synthesizing keystrokes.
+  // Production never sets KOBE_TEST_FAKE_PORT, so the globals are
+  // harmless dead branches.
+  useTestSideChannel({ orchestrator: props.orchestrator, activeTask })
 
   return (
     <box flexDirection="column" flexGrow={1}>
