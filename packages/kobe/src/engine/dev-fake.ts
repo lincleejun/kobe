@@ -17,14 +17,8 @@
  * on a single frame. Tweakable via the optional constructor arg.
  */
 
-import type {
-  AIEngine,
-  EngineEvent,
-  Message,
-  SessionHandle,
-  SpawnOpts,
-} from "../types/engine.ts"
 import { FakeAIEngine } from "../../test/behavior/fake-engine.ts"
+import type { AIEngine, EngineEvent, Message, SessionHandle, SessionMeta, SpawnOpts } from "../types/engine.ts"
 
 export interface DevAIEngineOpts {
   /** Delay between successive scripted events. Defaults to 30ms. */
@@ -63,6 +57,10 @@ export class DevAIEngine implements AIEngine {
     return this.inner.deleteHistory(sessionId)
   }
 
+  async listSessions(cwd: string): Promise<SessionMeta[]> {
+    return this.inner.listSessions(cwd)
+  }
+
   async stop(handle: SessionHandle): Promise<void> {
     return this.inner.stop(handle)
   }
@@ -76,9 +74,7 @@ export class DevAIEngine implements AIEngine {
    */
   private scheduleCannedReply(sessionId: string, prompt: string, opts: SpawnOpts | undefined): void {
     const planMode = opts?.permissionMode === "plan"
-    const events: EngineEvent[] = planMode
-      ? buildPlanModeReply(prompt)
-      : buildAssistantReply(prompt)
+    const events: EngineEvent[] = planMode ? buildPlanModeReply(prompt) : buildAssistantReply(prompt)
 
     let i = 0
     const tick = () => {
@@ -94,15 +90,24 @@ export class DevAIEngine implements AIEngine {
 function buildAssistantReply(prompt: string): EngineEvent[] {
   const trimmed = prompt.trim().slice(0, 120)
   const echo = trimmed.length === 0 ? "(empty prompt)" : trimmed
+  // Chunks intentionally exercise every Markdown shape the chat-pane
+  // renderer supports so `bun run dev:test` doubles as a visual smoke
+  // for KOB-28 (heading / ordered list / blockquote / link) on top of
+  // the older bold / italic / inline-code / bullet / fenced-code paths.
   const chunks = [
-    "Got it — ",
-    "I read your prompt as: ",
+    "# Mock reply\n\n",
+    "Got it — I read your prompt as: ",
     `“${echo}”.\n\n`,
-    "This is a `dev:test` mock response. ",
-    "No real Claude was invoked.\n\n",
-    "- The fake engine emits a handful of streamed deltas\n",
-    "- Then a usage frame\n",
-    "- Then a `done` so the composer unlocks.\n",
+    "This is a **`dev:test`** mock response. _No real Claude was invoked._\n\n",
+    "## What just happened\n\n",
+    "1. The fake engine streamed a handful of deltas\n",
+    "2. Then a usage frame\n",
+    "3. Then a `done` so the composer unlocks\n\n",
+    "### Bullet sanity\n\n",
+    "- inline code: `cleanChatText`\n",
+    "- a [link to claude](https://claude.com)\n\n",
+    "> Block quotes look like this — useful when the model cites itself.\n\n",
+    "```ts\nexport const ok = true\n```\n",
   ]
   const events: EngineEvent[] = chunks.map((text) => ({ type: "assistant.delta", text }))
   events.push({ type: "usage", input_tokens: 42, output_tokens: 87 })

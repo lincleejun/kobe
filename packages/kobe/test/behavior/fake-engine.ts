@@ -21,7 +21,7 @@
  *     pulls. If a test needs paced delivery, add `delayMs` later.
  */
 
-import type { AIEngine, EngineEvent, Message, SessionHandle, SpawnOpts } from "./_engine-types"
+import type { AIEngine, EngineEvent, Message, SessionHandle, SessionMeta, SpawnOpts } from "./_engine-types"
 
 type ScriptedQueue = {
   events: EngineEvent[]
@@ -111,6 +111,27 @@ export class FakeAIEngine implements AIEngine {
 
   async deleteHistory(sessionId: string): Promise<void> {
     this.historyBySession.delete(sessionId)
+  }
+
+  /**
+   * Returns one entry per `historyBySession` key, with `firstUserMessage`
+   * synthesized from the first user message. Tests don't typically
+   * exercise the resume-picker, so this stays minimal — extend if a
+   * test needs richer metadata (mtime, message-count).
+   */
+  async listSessions(_cwd: string): Promise<SessionMeta[]> {
+    const out: SessionMeta[] = []
+    for (const [sessionId, msgs] of this.historyBySession) {
+      const firstUser = msgs.find((m) => m.role === "user")
+      const preview = firstUser && typeof firstUser.content === "string" ? firstUser.content : null
+      out.push({
+        sessionId,
+        mtimeMs: 0,
+        firstUserMessage: preview,
+        messageCount: msgs.length,
+      })
+    }
+    return out
   }
 
   async stop(handle: SessionHandle): Promise<void> {

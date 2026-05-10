@@ -38,10 +38,11 @@
  */
 
 import type { ChildProcessWithoutNullStreams } from "node:child_process"
-import type { AIEngine, EngineEvent, Message, SessionHandle, SpawnOpts } from "@/types/engine"
+import type { AIEngine, EngineEvent, Message, SessionHandle, SessionMeta, SpawnOpts } from "@/types/engine"
 import { findClaudeBinary } from "./binary"
 import { deleteHistory as deleteHistoryImpl, readHistory as readHistoryImpl } from "./history"
 import { type ProcessHandle, SessionRegistry } from "./registry"
+import { listSessionsForCwd } from "./sessions"
 import { type SpawnedClaude, spawnClaudeProcess } from "./spawn"
 import { parseStreamJson, readLines } from "./stream"
 
@@ -123,6 +124,10 @@ export class ClaudeCodeLocal implements AIEngine {
 
   async deleteHistory(sessionId: string): Promise<void> {
     return deleteHistoryImpl(sessionId)
+  }
+
+  async listSessions(cwd: string): Promise<SessionMeta[]> {
+    return listSessionsForCwd(cwd)
   }
 
   async stop(handle: SessionHandle): Promise<void> {
