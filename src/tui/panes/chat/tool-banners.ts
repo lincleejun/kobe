@@ -65,8 +65,7 @@ export function summarizeGrep(input: unknown, output: unknown, done: boolean): s
   const found = output.match(/^Found (\d+)\s+(file|match|line)/i)
   if (found) {
     const n = Number(found[1])
-    const noun =
-      found[2]?.toLowerCase() === "file" ? (n === 1 ? "file" : "files") : n === 1 ? "match" : "matches"
+    const noun = found[2]?.toLowerCase() === "file" ? (n === 1 ? "file" : "files") : n === 1 ? "match" : "matches"
     return `${head} · ${n} ${noun}`
   }
   const lines = output.split(/\r?\n/).filter((l) => l.length > 0)
