@@ -558,7 +558,7 @@ export function Composer(props: ComposerProps) {
   const actionHint = () => {
     if (!props.hasTask) return ""
     if (props.isStreaming) return "streaming — wait for done"
-    return "enter send · shift+enter newline · shift+tab mode"
+    return "enter send · shift+enter or ctrl+j newline · shift+tab mode"
   }
   const modelLabel = () => props.modelLabel?.() ?? "claude-code"
 

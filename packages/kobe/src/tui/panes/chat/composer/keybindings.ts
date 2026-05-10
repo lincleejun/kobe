@@ -11,21 +11,28 @@
  * as "send" and shift+enter as "newline." So we flip:
  *
  *   - `enter` (return)            → submit
- *   - `shift+enter`               → newline   (kitty / CSI-u terminals)
- *   - `linefeed` (Ctrl+J / 0x0A)  → newline   (fallback for terminals
- *                                              that don't distinguish
- *                                              shift+enter from plain
- *                                              enter — most don't)
+ *   - `shift+enter`               → newline   (kitty / CSI-u or xterm
+ *                                              modifyOtherKeys terminals)
+ *   - `linefeed` (Ctrl+J / 0x0A)  → newline   (universal fallback for
+ *                                              terminals that don't
+ *                                              distinguish shift+enter
+ *                                              from plain enter)
  *
  * Note on terminal capability:
  *
- *   Most terminals (Terminal.app, gnome-terminal, default tmux) send
- *   the same byte (`\r`) for plain enter and shift+enter. Only kitty,
- *   foot, and a handful of others implement the kitty-keyboard /
- *   CSI-u protocol that lets us tell them apart. opentui's renderer
- *   probes for this support at startup; if available, we get
- *   `shift: true` on the key event. If not, the user can still get a
- *   newline via Ctrl+J. Both bindings live below.
+ *   Most terminals (Terminal.app, default Windows Terminal, default
+ *   gnome-terminal, default tmux) send the same byte (`\r`) for plain
+ *   enter and shift+enter. Only kitty, foot, recent wezterm, and a
+ *   handful of others implement either the kitty-keyboard / CSI-u
+ *   protocol or xterm's modifyOtherKeys — opentui parses both. If the
+ *   terminal honors neither request, `shift: true` never appears on the
+ *   key event and the shift+enter binding below is dead. That's a
+ *   terminal-side limitation: at the byte level the input is
+ *   indistinguishable from a plain enter, so there's nothing we can do
+ *   in software. The Ctrl+J / linefeed binding is the universal
+ *   workaround — it always produces 0x0A, which always routes to
+ *   newline. The composer's action hint mentions both so users on
+ *   non-CSI-u terminals discover the fallback.
  *
  * Up/down arrow handling for prompt history is NOT in this map — that
  * lives in the composer's `onKeyDown` handler, which preventDefault's
@@ -55,8 +62,9 @@ export const composerKeyBindings: Binding[] = [
   // Plain enter → submit (overrides default `return → newline`).
   { name: "return", action: "submit" },
   // Shift+enter → newline. Only fires in terminals that report the
-  // shift modifier on enter (kitty / CSI-u). On other terminals this
-  // binding is dead — the user uses Ctrl+J (linefeed) instead.
+  // shift modifier on enter (kitty / CSI-u or xterm modifyOtherKeys).
+  // On other terminals this binding is dead — the user uses Ctrl+J
+  // (linefeed) instead, which the action hint advertises.
   { name: "return", shift: true, action: "newline" },
   // Ctrl+J / 0x0A → newline. The terminal-agnostic way to insert a
   // newline at the cursor. Default already maps `linefeed → newline`,
