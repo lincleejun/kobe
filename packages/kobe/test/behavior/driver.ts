@@ -41,7 +41,17 @@ import * as pty from "node-pty"
 import { normalizeScreen } from "./screen"
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
-const REPO_ROOT = path.resolve(HERE, "..", "..")
+/** Root of THIS package (`packages/kobe/`). Use for src/test paths. */
+const PACKAGE_ROOT = path.resolve(HERE, "..", "..")
+/**
+ * Root of the monorepo (two levels above `packages/kobe/`). Bun
+ * workspaces hoist `node_modules` here, so any check that needs the
+ * resolved on-disk location of a dependency goes through this root,
+ * not the package root. Falls back to the package root for legacy
+ * single-package callers (the `node_modules` lookup below tries
+ * monorepo root first, then package root).
+ */
+const MONOREPO_ROOT = path.resolve(HERE, "..", "..", "..", "..")
 
 /** Default PTY size — matches a typical 80x24 terminal. */
 const DEFAULT_COLS = 80
@@ -103,10 +113,11 @@ export interface KobeHandle {
  * ship a spawn-helper (Windows, etc.).
  */
 function ensureSpawnHelperExecutable(): void {
-  // Resolve `node-pty`'s on-disk location relative to the repo root —
-  // do not rely on `require.resolve` because vitest may be using
-  // node's ESM loader where that's a hassle.
-  const npPkg = path.join(REPO_ROOT, "node_modules", "node-pty")
+  // Resolve `node-pty`'s on-disk location. Try monorepo root first
+  // (Bun workspaces hoist deps there), then this package's local
+  // node_modules (legacy / single-package layout).
+  let npPkg = path.join(MONOREPO_ROOT, "node_modules", "node-pty")
+  if (!fs.existsSync(npPkg)) npPkg = path.join(PACKAGE_ROOT, "node_modules", "node-pty")
   if (!fs.existsSync(npPkg)) return // not installed in this worktree
   const arch = `${process.platform}-${process.arch}`
   const helper = path.join(npPkg, "prebuilds", arch, "spawn-helper")
@@ -137,7 +148,7 @@ function defaultCommand(cwd: string): { command: string; args: string[] } {
 export async function spawnKobe(opts: SpawnKobeOpts = {}): Promise<KobeHandle> {
   ensureSpawnHelperExecutable()
 
-  const cwd = opts.cwd ?? REPO_ROOT
+  const cwd = opts.cwd ?? PACKAGE_ROOT
   const cols = opts.cols ?? DEFAULT_COLS
   const rows = opts.rows ?? DEFAULT_ROWS
   const settleMs = opts.settleMs ?? DEFAULT_SETTLE_MS

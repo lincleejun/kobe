@@ -44,17 +44,19 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Lint
+      - name: Lint (monorepo)
         # Biome runs first because it's the cheapest check (~50ms) — fail
         # fast on style/format drift before we burn minutes on tsc + tests
-        # + build.
+        # + build. Biome at root sees all packages.
         run: bun run lint
 
-      - name: Typecheck
+      - name: Typecheck (kobe package)
+        # Workspaces hoist deps; per-package commands run via `bun --filter`.
         run: bun run typecheck
 
-      - name: Unit tests
-        run: bun x vitest run test/tui test/types test/orchestrator test/engine --passWithNoTests
+      - name: Unit tests (kobe package)
+        working-directory: packages/kobe
+        run: bun x vitest run test/cli test/tui test/types test/orchestrator test/engine test/state --passWithNoTests
 
-      - name: Build
+      - name: Build (kobe package)
         run: bun run build
