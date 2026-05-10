@@ -78,6 +78,11 @@ async function main(): Promise<void> {
     await runDiagnoseSubcommand()
     return
   }
+  if (subcommand === "theme") {
+    const { runThemeSubcommand } = await import("./theme.ts")
+    await runThemeSubcommand(rest)
+    return
+  }
 
   // Default: launch the TUI. Dynamic import so non-TUI subcommands
   // (like `kobe add` / `kobe diagnose`) don't pull in opentui/solid
