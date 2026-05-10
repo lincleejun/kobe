@@ -209,16 +209,17 @@ export function Sidebar(props: SidebarProps) {
          so a Settings change unifies the focus signal across all
          panes (default = primary / terracotta). */}
       <box flexDirection="row" gap={1} paddingBottom={1}>
-        <Show when={focusedAccessor()} fallback={<text fg={theme.textMuted}> </text>}>
-          <text fg={theme.focusAccent} attributes={TextAttributes.BOLD} wrapMode="none">
-            ▌
-          </text>
-        </Show>
-        {/* Bold leading `1` + uppercase `TASKS` — matches the
+        {/* Bold + underlined `1` flush left — matches the
             WORKSPACE / FILES / TERMINAL pane headers' shape.
-            Previously read `kobe` (the brand) which made the four
-            panes feel inconsistent — `TASKS` says what the pane is. */}
-        <text fg={focusedAccessor() ? theme.focusAccent : theme.textMuted} attributes={TextAttributes.BOLD} wrapMode="none">
+            The underline doubles as a "this digit is a chord" hint
+            (ctrl+1 jumps focus here). Color tracks focus state
+            (focusAccent when active, textMuted otherwise) so the
+            digit IS the focus marker — no separate ▌ glyph. */}
+        <text
+          fg={focusedAccessor() ? theme.focusAccent : theme.textMuted}
+          attributes={TextAttributes.BOLD | TextAttributes.UNDERLINE}
+          wrapMode="none"
+        >
           1
         </text>
         <text fg={focusedAccessor() ? theme.focusAccent : theme.textMuted} attributes={TextAttributes.BOLD} wrapMode="none">

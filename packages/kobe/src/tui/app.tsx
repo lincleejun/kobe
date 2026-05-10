@@ -794,27 +794,23 @@ function PaneHeader(props: { title: string; subtitle?: string; focused?: boolean
       flexDirection="row"
       justifyContent="space-between"
       flexShrink={0}
-      // paddingTop=1 + paddingLeft=2 mirror the Sidebar pane's outer
-      // padding so all four pane titles sit at the same row + column.
-      // Earlier WORKSPACE/FILES/TERMINAL rendered at row 0 col 1 while
-      // the sidebar's TASKS sat at row 1 col 2 — visually misaligned
-      // by one cell in each axis.
+      // paddingTop=1 mirrors the Sidebar pane's outer paddingTop so
+      // all four pane titles sit at the same baseline row. The
+      // ordinal sits flush at the left edge (no ▌ marker, no extra
+      // gap) — earlier the `▌ <ord> <title>` shape with gap=1
+      // produced two cells of whitespace before the digit and the
+      // four markers visually drifted out of alignment by a column.
       paddingTop={1}
       paddingLeft={2}
       paddingRight={2}
     >
       <box flexDirection="row" gap={1} flexShrink={1}>
-        <Show when={focused()} fallback={<text fg={theme.textMuted}> </text>}>
-          <text fg={theme.focusAccent} attributes={TextAttributes.BOLD} wrapMode="none">
-            ▌
-          </text>
-        </Show>
-        {/* Bold leading ordinal — corresponds to the global ctrl+N
-            focus chord (focus.numeric in KobeKeymap; sidebar=1,
-            workspace=2, files=3, terminal=4). The user sees the
-            chord at the same spot they read the pane title from. */}
+        {/* Ordinal flush left — bold + underline doubles as the
+            "this is a chord" visual hint. Color tracks focus state
+            (focusAccent when active, textMuted otherwise) so the
+            digit also functions as the focus marker. */}
         <Show when={props.ordinal !== undefined}>
-          <text fg={titleColor()} attributes={TextAttributes.BOLD} wrapMode="none">
+          <text fg={titleColor()} attributes={TextAttributes.BOLD | TextAttributes.UNDERLINE} wrapMode="none">
             {props.ordinal}
           </text>
         </Show>
@@ -931,13 +927,12 @@ function TopBar(props: {
   return (
     <box
       flexDirection="row"
-      // paddingY=1 around the topbar so it occupies 3 rows total —
-      // gives the brand + branch + PR row breathing space against
-      // the pane chrome below. Earlier the topbar squeezed into a
-      // single row and read as part of the workspace pane's chrome
-      // rather than as the global app frame.
+      // paddingTop=1 only (no paddingBottom) — total 2 rows. Adds
+      // breathing room above the brand without growing the app
+      // frame past 2 rows; the pane headers immediately below
+      // already start at row 1 of their containers, so the brand
+      // gets its own row above them with no extra trailing gap.
       paddingTop={1}
-      paddingBottom={1}
       paddingLeft={2}
       paddingRight={2}
       flexShrink={0}
