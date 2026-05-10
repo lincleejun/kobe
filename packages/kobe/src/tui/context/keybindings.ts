@@ -194,20 +194,20 @@ export const KobeKeymap: readonly KobeBinding[] = [
     hint: { keys: "q", label: "quit" },
   },
   {
-    // Workspace-only shortcut to bring focus back to the sidebar
-    // (tasks list). Mirrors esc / ctrl+1 in effect; the chord is
-    // exposed as ctrl+q so the muscle memory is "quit-ish chord →
-    // exit chat to tasks", and then plain `q` (sidebar-scoped)
-    // actually quits. Scoped to `workspace` because it's specifically
-    // the "leave the chat" verb — from the sidebar there's nothing
-    // to leave, and from files / terminal the user typically wants
-    // ctrl+1..4 / esc instead.
+    // Global "back to tasks" chord. ctrl+q works on every terminal
+    // (ctrl+letter maps to a stable C0 control byte) so it's the
+    // reliable fallback even when ctrl+1..4 doesn't reach kobe —
+    // ctrl+digit needs CSI-u / kitty keyboard, which not all
+    // terminals + tmux configurations propagate. Once focused on
+    // the sidebar, plain `q` quits. Promoted from workspace-only
+    // so files/terminal panes can also escape to tasks with the
+    // same chord.
     id: "focus.sidebar",
-    scope: "workspace",
+    scope: "global",
     keys: ["ctrl+q"],
-    category: "Workspace",
+    category: "Navigation",
     description: "Back to sidebar (tasks)",
-    hint: { keys: "ctrl+q", label: "tasks" },
+    hint: { keys: "ctrl+q", label: "tasks", pin: "right" },
   },
 
   // ─── Navigation ───────────────────────────────────────────────────────
