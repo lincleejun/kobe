@@ -35,6 +35,100 @@
 import type { EngineEvent, Message, OrchestratorEvent } from "../../../types/engine.ts"
 
 /* --------------------------------------------------------------------- */
+/*  Bounded scrollback                                                    */
+/* --------------------------------------------------------------------- */
+
+/**
+ * Maximum number of {@link ChatRow}s retained per chat tab. When a
+ * mutation would push `messages.length` above this cap, the oldest
+ * rows are dropped from the front and a single coalescing sentinel
+ * `system` row is left at index 0 so the user knows scrollback was
+ * truncated.
+ *
+ * **Why 1000.** The perf baseline (`docs/perf/baseline.md`,
+ * "Streaming 1000 assistant.delta events") measured RSS growth of
+ * ~168 MB across a 1000-event burst that all coalesce into one row
+ * — i.e. the row count cap is not what bounded *that* run; the
+ * underlying string is. But a real session that produces 1000
+ * distinct rows (alternating user/assistant + tools) sits in the
+ * same RSS ballpark, and 1000 rows is well past the point where
+ * scrollback ceases to be useful (Claude Code's own scroll buffer
+ * is similar). Halve later if the memory profile shifts.
+ *
+ * Not user-tunable yet — see PLAN.md for the eventual settings hook.
+ */
+export const SCROLLBACK_CAP = 1000
+
+/** Plain-ASCII sentinel marker. Pattern is grepped to coalesce. */
+const SENTINEL_PREFIX = "(scrollback truncated — "
+const SENTINEL_SUFFIX = " rows dropped)"
+
+/** Build a sentinel row body for `n` dropped rows. */
+function sentinelText(n: number): string {
+  return `${SENTINEL_PREFIX}${n}${SENTINEL_SUFFIX}`
+}
+
+/**
+ * Parse the dropped-count from a sentinel row's text. Returns `null`
+ * if the text doesn't match the sentinel shape — used to detect
+ * "is this row a previously-emitted sentinel we should coalesce
+ * into?" without piggy-backing extra fields on `ChatRow`.
+ */
+function parseSentinelCount(text: string): number | null {
+  if (!text.startsWith(SENTINEL_PREFIX) || !text.endsWith(SENTINEL_SUFFIX)) return null
+  const middle = text.slice(SENTINEL_PREFIX.length, text.length - SENTINEL_SUFFIX.length)
+  const n = Number.parseInt(middle, 10)
+  return Number.isFinite(n) && n >= 0 && String(n) === middle ? n : null
+}
+
+/**
+ * Return `messages` capped to {@link SCROLLBACK_CAP} rows. If already
+ * within cap, the same array is returned (identity-stable for downstream
+ * reactivity). When truncation runs:
+ *
+ *   - Oldest content rows are dropped from the front.
+ *   - A single `system` sentinel row is placed at index 0 indicating
+ *     how many rows were dropped in total.
+ *   - If a sentinel was already at index 0, its count is bumped — we
+ *     never end up with two sentinels stacked.
+ *
+ * The caller is responsible for not invoking this mid-coalesce of a
+ * live row; in practice every mutation path here appends to (or
+ * patches) the tail, and the live in-flight assistant row is the
+ * last element. Front-truncation never touches the tail, so the live
+ * row is preserved by construction.
+ *
+ * Pure: builds a new array only when truncation is needed.
+ */
+function capMessages(messages: readonly ChatRow[], nowIso: string): readonly ChatRow[] {
+  if (messages.length <= SCROLLBACK_CAP) return messages
+
+  const head = messages[0]
+  const existingDropped =
+    head && head.kind === "system" ? parseSentinelCount(head.text) : null
+
+  // Slice from `start` to the end keeps the most-recent rows. When
+  // there's no existing sentinel we reserve one slot for the new one
+  // (cap = sentinel + (cap-1) content rows). When there IS one, we
+  // also reserve one slot — and skip the old sentinel itself, so
+  // dropped-count reflects only content rows lost over time.
+  const reserveSentinel = 1
+  const start = messages.length - (SCROLLBACK_CAP - reserveSentinel)
+  const tail = messages.slice(Math.max(start, existingDropped !== null ? 1 : 0))
+
+  // How many content rows did we actually drop in this call?
+  // - With no prior sentinel: `start` content rows dropped.
+  // - With a prior sentinel: rows from index 1..start dropped, i.e.
+  //   `start - 1` content rows (we never re-count the sentinel itself).
+  const droppedThisCall = existingDropped !== null ? Math.max(0, start - 1) : Math.max(0, start)
+  const totalDropped = (existingDropped ?? 0) + droppedThisCall
+
+  const sentinelTs = existingDropped !== null && head ? head.ts : nowIso
+  const sentinel: ChatRow = { kind: "system", text: sentinelText(totalDropped), ts: sentinelTs }
+  return [sentinel, ...tail]
+}
+
+/* --------------------------------------------------------------------- */
 /*  Noise filtering — Claude Code internal wrapper tags                   */
 /* --------------------------------------------------------------------- */
 
@@ -181,7 +275,9 @@ export function setMessagesFromHistory(state: ChatState, past: readonly Message[
     appendRowsFromMessage(rows, toolIndexById, m)
   }
 
-  return { ...state, messages: rows }
+  // Apply the cap on the hydration path too — don't load 5000
+  // historical rows just to drop 4000 immediately on the next delta.
+  return { ...state, messages: capMessages(rows, new Date().toISOString()) }
 }
 
 /** Append a freshly-submitted user prompt. Sets `isStreaming: true`. */
@@ -190,7 +286,7 @@ export function pushUser(state: ChatState, prompt: string, nowIso: string = new 
     ...state,
     isStreaming: true,
     error: null,
-    messages: [...state.messages, { kind: "user", text: prompt, ts: nowIso }],
+    messages: capMessages([...state.messages, { kind: "user", text: prompt, ts: nowIso }], nowIso),
   }
 }
 
@@ -224,6 +320,8 @@ export function applyEvent(
       if (last && last.kind === "assistant") {
         // Concat into the last assistant row (handles token-by-token
         // streaming gracefully if the engine ever switches to that).
+        // No length change → no truncation needed; the live in-flight
+        // row stays at the tail and is preserved.
         const merged: ChatRow = { kind: "assistant", text: last.text + ev.text, ts: last.ts }
         return {
           ...state,
@@ -234,13 +332,16 @@ export function applyEvent(
       return {
         ...state,
         isStreaming: true,
-        messages: [...state.messages, { kind: "assistant", text: ev.text, ts: nowIso }],
+        messages: capMessages([...state.messages, { kind: "assistant", text: ev.text, ts: nowIso }], nowIso),
       }
     }
     case "tool.start":
       return {
         ...state,
-        messages: [...state.messages, { kind: "tool", name: ev.name, input: ev.input, done: false, ts: nowIso }],
+        messages: capMessages(
+          [...state.messages, { kind: "tool", name: ev.name, input: ev.input, done: false, ts: nowIso }],
+          nowIso,
+        ),
       }
     case "tool.result": {
       // Find the most recent unfinished tool row with this name and
@@ -251,14 +352,18 @@ export function applyEvent(
         const patched: ChatRow = { ...target, output: ev.output, done: true }
         const next = state.messages.slice()
         next[idx] = patched
+        // In-place patch — no length change, cap not needed.
         return { ...state, messages: next }
       }
       return {
         ...state,
-        messages: [
-          ...state.messages,
-          { kind: "tool", name: ev.name, input: undefined, output: ev.output, done: true, ts: nowIso },
-        ],
+        messages: capMessages(
+          [
+            ...state.messages,
+            { kind: "tool", name: ev.name, input: undefined, output: ev.output, done: true, ts: nowIso },
+          ],
+          nowIso,
+        ),
       }
     }
     case "usage":
@@ -270,14 +375,17 @@ export function applyEvent(
         ...state,
         isStreaming: false,
         error: ev.message,
-        messages: [...state.messages, { kind: "system", text: `error: ${ev.message}`, ts: nowIso }],
+        messages: capMessages(
+          [...state.messages, { kind: "system", text: `error: ${ev.message}`, ts: nowIso }],
+          nowIso,
+        ),
       }
     case "user.inject":
       return {
         ...state,
         isStreaming: true,
         error: null,
-        messages: [...state.messages, { kind: "user", text: ev.text, ts: nowIso }],
+        messages: capMessages([...state.messages, { kind: "user", text: ev.text, ts: nowIso }], nowIso),
       }
     case "system.info":
       // Dim status note from the orchestrator (worktree allocated,
@@ -287,7 +395,7 @@ export function applyEvent(
       // failed" prefixes, neither of which we use here.
       return {
         ...state,
-        messages: [...state.messages, { kind: "system", text: ev.text, ts: nowIso }],
+        messages: capMessages([...state.messages, { kind: "system", text: ev.text, ts: nowIso }], nowIso),
       }
     case "user_input.request": {
       // Subprocess has exited (the tool runs to completion in -p mode
@@ -298,34 +406,40 @@ export function applyEvent(
         return {
           ...state,
           isStreaming: false,
-          messages: [
-            ...state.messages,
-            {
-              kind: "approval",
-              requestId: ev.requestId,
-              tool: "ExitPlanMode",
-              plan: ev.payload.plan,
-              filePath: ev.payload.filePath,
-              status: "pending",
-              ts: nowIso,
-            },
-          ],
+          messages: capMessages(
+            [
+              ...state.messages,
+              {
+                kind: "approval",
+                requestId: ev.requestId,
+                tool: "ExitPlanMode",
+                plan: ev.payload.plan,
+                filePath: ev.payload.filePath,
+                status: "pending",
+                ts: nowIso,
+              },
+            ],
+            nowIso,
+          ),
         }
       }
       if (ev.payload.kind === "ask_question") {
         return {
           ...state,
           isStreaming: false,
-          messages: [
-            ...state.messages,
-            {
-              kind: "question",
-              requestId: ev.requestId,
-              questions: ev.payload.questions,
-              answers: null,
-              ts: nowIso,
-            },
-          ],
+          messages: capMessages(
+            [
+              ...state.messages,
+              {
+                kind: "question",
+                requestId: ev.requestId,
+                questions: ev.payload.questions,
+                answers: null,
+                ts: nowIso,
+              },
+            ],
+            nowIso,
+          ),
         }
       }
       return state
@@ -334,6 +448,7 @@ export function applyEvent(
       // Find the matching pending row and patch its terminal state.
       // We don't remove the row — keep the question/plan visible so
       // the user can scroll back and remember what they answered.
+      // In-place patch — no length change, cap not needed.
       const idx = findLastIndex(state.messages, (m) => {
         if (m.kind === "approval") return m.requestId === ev.requestId && m.status === "pending"
         if (m.kind === "question") return m.requestId === ev.requestId && m.answers === null
@@ -370,7 +485,10 @@ export function pushSystemError(
     ...state,
     isStreaming: false,
     error: message,
-    messages: [...state.messages, { kind: "system", text: `runTask failed: ${message}`, ts: nowIso }],
+    messages: capMessages(
+      [...state.messages, { kind: "system", text: `runTask failed: ${message}`, ts: nowIso }],
+      nowIso,
+    ),
   }
 }
 
