@@ -777,7 +777,7 @@ export type AppDeps = {
 /* --------------------------------------------------------------------- */
 /*  PaneHeader — uniform CAPS-bold pane label (agent-deck-style chunking)  */
 /* --------------------------------------------------------------------- */
-function PaneHeader(props: { title: string; subtitle?: string; focused?: boolean; ordinal?: number }) {
+function PaneHeader(props: { title: string; subtitle?: string; focused?: boolean; ordinal?: string | number }) {
   const { theme } = useTheme()
   // Focused panes paint in `theme.focusAccent` — a user-controllable
   // slot (Settings → General → Focus accent) that resolves to one of
@@ -1182,20 +1182,23 @@ function Shell(props: AppDeps) {
     return () => baseAcc() && dialog.stack.length === 0
   }
 
-  // Numeric jumps: ctrl+1..4 pick a pane explicitly. The chord list lives
-  // in KobeKeymap as `focus.numeric`; the handler dispatches by chord.
-  // `ctrl` prefix avoids collision with FileTree's plain 1/2/3 tabs and
-  // with composer typing. Always-on (modifier keys don't go to inputs).
-  const FOCUS_NUMERIC_TARGETS: readonly PaneId[] = ["sidebar", "workspace", "files", "terminal"]
+  // ctrl+hjkl pane focus. h/j/k/l → sidebar / workspace / files /
+  // terminal (ordinal 1/2/3/4 mapped onto the vim row). ctrl+letter
+  // chords have stable C0 control byte mappings, so they work in
+  // every terminal + tmux config without CSI-u / kitty keyboard /
+  // per-user setup. The handler reads `evt.name` to dispatch.
+  const FOCUS_HJKL_TARGETS: Record<string, PaneId> = {
+    h: "sidebar",
+    j: "workspace",
+    k: "files",
+    l: "terminal",
+  }
   useBindings(() => ({
     enabled: dialog.stack.length === 0,
     bindings: bindByIds({
       "focus.numeric": (evt) => {
-        const n = Number.parseInt(evt.name ?? "", 10)
-        if (n >= 1 && n <= FOCUS_NUMERIC_TARGETS.length) {
-          const target = FOCUS_NUMERIC_TARGETS[n - 1]
-          if (target) setFocusedPane(target)
-        }
+        const target = FOCUS_HJKL_TARGETS[evt.name ?? ""]
+        if (target) setFocusedPane(target)
       },
     }),
   }))
@@ -1694,7 +1697,7 @@ function Shell(props: AppDeps) {
         >
           <PaneHeader
             title="WORKSPACE"
-            ordinal={2}
+            ordinal="j"
             subtitle={activeTask()?.title ?? "no task"}
             focused={focusedPane() === "workspace"}
           />
@@ -1749,7 +1752,7 @@ function Shell(props: AppDeps) {
             symmetric and the chat in the middle is visibly the focus. */}
         <box flexDirection="column" flexGrow={1} flexShrink={1} flexBasis={0} backgroundColor={theme.backgroundPanel}>
           <box flexShrink={0} height={filesHeight()} flexDirection="column" onMouseUp={() => setFocusedPane("files")}>
-            <PaneHeader title="FILES" ordinal={3} focused={focusedPane() === "files"} />
+            <PaneHeader title="FILES" ordinal="k" focused={focusedPane() === "files"} />
             <box flexGrow={1}>
               <FileTree worktreePath={worktreePathAcc} onOpenFile={openFileInCenter} focused={isFocused("files")} />
             </box>
@@ -1771,7 +1774,7 @@ function Shell(props: AppDeps) {
           >
             <PaneHeader
               title="TERMINAL"
-              ordinal={4}
+              ordinal="l"
               subtitle={worktreePathAcc() ? worktreePathAcc()?.split("/").slice(-1)[0] : undefined}
               focused={focusedPane() === "terminal"}
             />

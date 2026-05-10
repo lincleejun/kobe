@@ -136,9 +136,13 @@ export type KobeBinding = {
 export const KobeKeymap: readonly KobeBinding[] = [
   // ─── Global ───────────────────────────────────────────────────────────
   {
+    // Palette uses cmd+p / ctrl+p (vscode/Cursor convention). ctrl+k
+    // is reserved for `focus.hjkl` (pane focus, k = files) — vim
+    // navigation feel for the four-pane layout. cmd+k still works
+    // on supporting terminals.
     id: "palette.open",
     scope: "global",
-    keys: ["cmd+k", "ctrl+k", "alt+k"],
+    keys: ["cmd+p", "ctrl+p", "cmd+k"],
     category: "Global",
     description: "Open command palette",
   },
@@ -222,19 +226,28 @@ export const KobeKeymap: readonly KobeBinding[] = [
     description: "Focus previous pane",
   },
   {
-    // `alt+1..4` (Option+digit on macOS) — reliable across every
-    // terminal + tmux config, NO setup required. ctrl+digit needs
-    // CSI-u / kitty keyboard, which iTerm2 has a known quirk
-    // where ctrl+1 (and ctrl+9 / ctrl+0) silently fall through to
-    // a bare digit byte — only ctrl+2..8 actually emit CSI-u.
-    // alt+digit always sends `ESC <digit>` two-byte sequence, no
-    // protocol negotiation, no per-key quirks.
+    // `ctrl+hjkl` — vim-style direct pane focus. Reliable across
+    // every terminal (ctrl+letter maps to stable C0 control bytes,
+    // no CSI-u / kitty keyboard / iTerm quirks). The four chords
+    // map to the four panes by ordinal:
+    //   ctrl+h → 1 = sidebar (TASKS)
+    //   ctrl+j → 2 = workspace
+    //   ctrl+k → 3 = files
+    //   ctrl+l → 4 = terminal
+    // Why hjkl and not 1234? ctrl+digit needs CSI-u (which iTerm2
+    // doesn't fully support — ctrl+1 falls through to a bare `1`
+    // byte) and alt+digit gets eaten by macOS launchers like
+    // Raycast. ctrl+letter just works. The conflict with composer
+    // editing chords (ctrl+h=backspace etc.) is OK in practice
+    // because the user's intent when pressing ctrl+h is "switch
+    // pane," and once focus moves to sidebar the textarea has
+    // already lost focus.
     id: "focus.numeric",
     scope: "global",
-    keys: ["alt+1", "alt+2", "alt+3", "alt+4"],
+    keys: ["ctrl+h", "ctrl+j", "ctrl+k", "ctrl+l"],
     category: "Navigation",
-    description: "Jump to pane (1=sidebar, 2=workspace, 3=files, 4=terminal)",
-    hint: { keys: "alt+1234", label: "focus", pin: "right" },
+    description: "Jump to pane (h=sidebar, j=workspace, k=files, l=terminal)",
+    hint: { keys: "ctrl+hjkl", label: "focus", pin: "right" },
   },
   {
     id: "app.copy_or_quit",

@@ -13,14 +13,16 @@ There are four panes:
 
 | Ordinal | Pane        | `scope` value | Focus chord |
 | ------- | ----------- | ------------- | ----------- |
-| 1       | Sidebar (TASKS) | `"sidebar"`   | `ctrl+1`    |
-| 2       | Workspace (chat / files preview) | `"workspace"` | `ctrl+2`    |
-| 3       | Files       | `"files"`     | `ctrl+3`    |
-| 4       | Terminal    | `"terminal"`  | `ctrl+4`    |
+| h       | Sidebar (TASKS) | `"sidebar"`   | `ctrl+h`    |
+| j       | Workspace (chat / files preview) | `"workspace"` | `ctrl+j`    |
+| k       | Files       | `"files"`     | `ctrl+k`    |
+| l       | Terminal    | `"terminal"`  | `ctrl+l`    |
 
-`ctrl+1..4` is **global** (`scope: "global"`, id `focus.numeric`). It fires from any pane, including when the chat composer has the
-keyboard. The only thing that suppresses it is an open dialog — every binding registration in `app.tsx` includes
-`enabled: dialog.stack.length === 0` so dialog-internal keys (esc to dismiss, enter to confirm) win on the dialog stack.
+`ctrl+hjkl` is **global** (`scope: "global"`, id `focus.numeric`). It fires from any pane, including when the chat composer has the
+keyboard. ctrl+letter chords map to stable C0 control bytes that every terminal sends without protocol negotiation, so the chord
+works without iTerm CSI-u, kitty keyboard, tmux extended-keys, or any per-user setup. The only thing that suppresses it is an
+open dialog — every binding registration in `app.tsx` includes `enabled: dialog.stack.length === 0` so dialog-internal keys
+(esc to dismiss, enter to confirm) win on the dialog stack.
 
 `tab` / `shift+tab` cycle the focused pane (`focus.next` / `focus.prev`). Same global rule.
 
@@ -50,7 +52,8 @@ site — they should agree.
 
 | Chord            | Overlap                                 | Resolution                                                                                                                                                                          |
 | ---------------- | --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `alt+1..4`       | `focus.numeric` (global) — works without any terminal config | Pane focus uses `alt+digit` (Option+digit on macOS) instead of `ctrl+digit`. **Why not ctrl?** ctrl+digit needs CSI-u / kitty keyboard support; even with kobe's `useKittyKeyboard: {}` enabled, iTerm2 has a known quirk where ctrl+1 (and ctrl+9 / ctrl+0) silently fall through to a bare `1` byte while ctrl+2..8 emit CSI-u correctly. tmux without `extended-keys on` strips them all. alt+digit produces a stable `ESC <digit>` two-byte sequence that every terminal sends without protocol negotiation, so the chord works for everyone with no setup. |
+| `ctrl+hjkl`      | `focus.numeric` (global) — works without any terminal config | Pane focus uses `ctrl+hjkl` (vim-style direction keys mapped onto pane ordinals h/j/k/l = sidebar/workspace/files/terminal). **Why not ctrl+digit?** ctrl+digit needs CSI-u / kitty keyboard support; even with kobe's `useKittyKeyboard: {}` enabled, iTerm2 has a quirk where ctrl+1 / ctrl+9 / ctrl+0 fall through to a bare digit byte while ctrl+2..8 emit CSI-u correctly. **Why not alt+digit?** Option+digit on macOS gets eaten by launchers like Raycast before reaching the terminal. ctrl+letter has stable C0 control byte mappings that every terminal sends, no protocol negotiation, no per-key quirks. |
+| `ctrl+k` palette vs focus | `palette.open` moved to ctrl+p (vscode/Cursor convention) | `ctrl+k` was the palette chord but is now the "focus files pane" chord (k = ordinal 3). Palette is reachable via `ctrl+p` / `cmd+p` instead. |
 | `esc`            | dialog dismiss vs `focus.detach`        | `DialogProvider` registers a higher-priority `escape` binding while a dialog is open; dialog pop wins. With no dialog, `focus.detach` runs and lands on sidebar.                    |
 | `ctrl+c`         | copy selection vs double-tap quit       | Selection-aware. With text selected → copy via OSC52 + clear. Else first press arms a 1.5s quit window; second press in window = quit. Both behaviours live in `useKobeKeybindings`. |
 | `tab`            | pane cycle vs textarea focus actions    | `useKobeKeybindings` no-ops `tab` when workspace has focus so the composer's own tab handling (slash completion, indent) wins.                                                      |

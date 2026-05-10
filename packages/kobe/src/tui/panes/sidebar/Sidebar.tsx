@@ -209,16 +209,17 @@ export function Sidebar(props: SidebarProps) {
          so a Settings change unifies the focus signal across all
          panes (default = primary / terracotta). */}
       <box flexDirection="row" gap={1} paddingBottom={1}>
-        {/* Bold `1` flush left — matches WORKSPACE/FILES/TERMINAL
-            shape. Focus-tracking color (focusAccent vs textMuted)
-            does the chord-hint job; the digit IS the focus marker,
-            no separate ▌ glyph. */}
+        {/* Bold `h` flush left — matches WORKSPACE/FILES/TERMINAL
+            shape. Letter is the ctrl+hjkl chord that focuses this
+            pane (h = sidebar, j = workspace, k = files, l = terminal).
+            Focus-tracking color (focusAccent vs textMuted) does the
+            chord-hint job. */}
         <text
           fg={focusedAccessor() ? theme.focusAccent : theme.textMuted}
           attributes={TextAttributes.BOLD}
           wrapMode="none"
         >
-          1
+          h
         </text>
         <text fg={focusedAccessor() ? theme.focusAccent : theme.textMuted} attributes={TextAttributes.BOLD} wrapMode="none">
           TASKS
