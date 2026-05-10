@@ -47,6 +47,7 @@ import { useTheme } from "../../context/theme"
 import { useBindings } from "../../lib/keymap"
 import { useDialog } from "../../ui/dialog"
 import { Composer, type ComposerSlashEntry } from "./Composer"
+import { Loading } from "./Loading"
 import { MessageList } from "./MessageList"
 import { ModelPicker } from "./composer/ModelPicker"
 import { BUILTIN_CLAUDE_SLASHES, type BuiltinSlash } from "./composer/builtin-slashes"
@@ -527,17 +528,6 @@ export function Chat(props: ChatProps) {
     }
   })
 
-  // Render-derived: index of the trailing assistant row (anchor for the
-  // streaming cursor) and trailing tool row (anchor for "enter expands").
-  const lastAssistantIdx = createMemo(() => {
-    const msgs = activeState().messages
-    for (let i = msgs.length - 1; i >= 0; i--) {
-      const r = msgs[i]
-      if (r && r.kind === "assistant") return i
-    }
-    return -1
-  })
-
   // Spinner shows whenever a turn is in flight — independent of how
   // many assistant rows already exist. Earlier this was gated on
   // `lastAssistantIdx() === -1`; that gate misfired on every turn
@@ -634,13 +624,9 @@ export function Chat(props: ChatProps) {
           <box paddingRight={1} gap={0}>
             <MessageList
               messages={activeState().messages}
-              isStreaming={activeState().isStreaming}
-              lastAssistantIdx={lastAssistantIdx()}
               expandedToolIndex={expandedToolIndex()}
               onToggleTool={toggleExpand}
-              showThinking={showThinking()}
-              thinkingStartedAt={turnStartedAt()}
-              thinkingResponseChars={currentTurnChars()}
+              showEmptyPlaceholder={!showThinking()}
               error={activeState().error}
               onApprove={(requestId, approve) => {
                 const taskId = props.taskId()
@@ -663,6 +649,19 @@ export function Chat(props: ChatProps) {
             />
           </box>
         </scrollbox>
+      </Show>
+
+      {/* Thinking spinner — pinned just above the composer, OUTSIDE the
+          scrolling transcript. Mirrors `refs/claude-code/src/screens/REPL.tsx`
+          (SpinnerWithVerb sits above the bottom prompt, not inside the
+          message list) so the spinner always reads as the live status
+          line regardless of where the user has scrolled. Keeping it
+          outside the scrollbox also avoids the ordering ambiguity that
+          showed up when Loading was the last child of an opentui flex
+          column alongside a reactive <For> — its position is now
+          deterministic by source order at this layer. */}
+      <Show when={showThinking() && props.taskId()}>
+        <Loading startedAt={turnStartedAt()} responseChars={currentTurnChars()} />
       </Show>
 
       {/* Composer. */}

@@ -47,7 +47,6 @@
 import { TextAttributes } from "@opentui/core"
 import { For, Show, createSignal } from "solid-js"
 import { useTheme } from "../../context/theme"
-import { Loading } from "./Loading"
 import { Markdown } from "./Markdown"
 import {
   BASH_OUTPUT_COLLAPSED_CAP,
@@ -98,33 +97,19 @@ const REFERENCE_MARK = "※"
  */
 const RESULT_PREFIX = "⎿ "
 
-/**
- * Streaming cursor — Claude Code uses a half-width cursor block on the
- * trailing assistant text while the turn is mid-flight.
- */
-const STREAMING_CURSOR = "▏"
-
 export interface MessageListProps {
   /** Chronological list of chat rows. Render in array order. */
   messages: readonly ChatRow[]
-  /** True between user submit and `done`/`error`. */
-  isStreaming: boolean
-  /** Index of the trailing assistant row, or -1. Anchors the cursor. */
-  lastAssistantIdx: number
   /** Index of the tool row currently shown expanded, or null. */
   expandedToolIndex: number | null
   /** Toggle the expand/collapse state for the tool at `index`. */
   onToggleTool: (index: number) => void
-  /** Whether to show the "thinking" spinner row at the bottom. */
-  showThinking: boolean
   /**
-   * Wall-clock ms timestamp marking the start of the current turn.
-   * Threaded through to {@link Loading} so the spinner can render
-   * `(2m 41s · ↓ 2.0k tokens)` like Claude Code.
+   * When true, render an empty placeholder when `messages` is empty.
+   * The shell suppresses this when the spinner is showing instead so
+   * an in-flight first turn doesn't briefly flash "Type a prompt below."
    */
-  thinkingStartedAt?: number
-  /** Chars of assistant text streamed so far this turn (for token est). */
-  thinkingResponseChars?: number
+  showEmptyPlaceholder: boolean
   /** Optional banner-state error message. Renders below the list. */
   error: string | null
   /**
@@ -288,14 +273,12 @@ function UserRow(props: { text: string }) {
  * Assistant row.
  *
  * Mirrors `AssistantTextMessage`: BLACK_CIRCLE prefix + Markdown body.
- * Streaming cursor is appended to the LAST assistant row in the list
- * mid-turn; `Markdown` handles inline code / bold / lists / code
- * blocks. The cursor lives outside the markdown so we don't hand it
- * to the parser as a stray glyph.
+ * No streaming cursor — claude-code's own AssistantTextMessage doesn't
+ * paint one either; the spinner row above the composer is the
+ * canonical "turn in flight" affordance.
  */
-function AssistantRow(props: { text: string; isLast: boolean; isStreaming: boolean }) {
+function AssistantRow(props: { text: string }) {
   const { theme } = useTheme()
-  const showCursor = () => props.isLast && props.isStreaming
   return (
     <box paddingTop={1} flexDirection="row" gap={1}>
       {/* width=2 mirrors `AssistantTextMessage`'s `minWidth={2}` on the
@@ -310,9 +293,6 @@ function AssistantRow(props: { text: string; isLast: boolean; isStreaming: boole
       </box>
       <box flexGrow={1} flexDirection="column">
         <Markdown source={props.text} />
-        <Show when={showCursor()}>
-          <text fg={theme.textMuted}>{STREAMING_CURSOR}</text>
-        </Show>
       </box>
     </box>
   )
@@ -970,9 +950,11 @@ function QuestionRow(props: {
 }
 
 /**
- * Public entry. Renders the full chronological list + the trailing
- * thinking spinner + an optional error banner. The shell wraps this in
- * a scrollbox so all the layout overflow is handled there.
+ * Public entry. Renders the full chronological list + an optional
+ * error banner. The shell wraps this in a scrollbox; the thinking
+ * spinner lives OUTSIDE this list (pinned above the composer) so it
+ * doesn't share scroll position with the transcript — mirrors
+ * `refs/claude-code/src/screens/REPL.tsx`'s SpinnerWithVerb placement.
  */
 export function MessageList(props: MessageListProps) {
   const { theme } = useTheme()
@@ -980,7 +962,7 @@ export function MessageList(props: MessageListProps) {
     <box flexDirection="column" gap={0}>
       {/* Empty placeholder — same copy as before so behavior tests
           asserting on substring "Type a prompt below" still pass. */}
-      <Show when={props.messages.length === 0 && !props.showThinking}>
+      <Show when={props.messages.length === 0 && props.showEmptyPlaceholder}>
         <box paddingTop={2}>
           <text fg={theme.textMuted}>Type a prompt below.</text>
         </box>
@@ -994,10 +976,7 @@ export function MessageList(props: MessageListProps) {
           const row = item.row
           const i = item.index
           if (row.kind === "user") return <UserRow text={row.text} />
-          if (row.kind === "assistant")
-            return (
-              <AssistantRow text={row.text} isLast={i === props.lastAssistantIdx} isStreaming={props.isStreaming} />
-            )
+          if (row.kind === "assistant") return <AssistantRow text={row.text} />
           if (row.kind === "system") return <SystemRow text={row.text} />
           if (row.kind === "approval") {
             return <ApprovalRow row={row} onApprove={(approve) => props.onApprove?.(row.requestId, approve)} />
@@ -1016,10 +995,6 @@ export function MessageList(props: MessageListProps) {
           )
         }}
       </For>
-
-      <Show when={props.showThinking}>
-        <Loading startedAt={props.thinkingStartedAt} responseChars={props.thinkingResponseChars} />
-      </Show>
 
       <Show when={props.error}>
         <box paddingTop={1} flexDirection="row" gap={1}>
