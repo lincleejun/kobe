@@ -44,7 +44,8 @@ import { FocusProvider, type PaneId, useFocus } from "./context/focus"
 import { KobeKeymap, bindByIds, useCtrlCArmed, useKobeKeybindings } from "./context/keybindings"
 import { KVProvider, useKV } from "./context/kv"
 import { SyncProvider } from "./context/sync"
-import { ThemeProvider, useTheme } from "./context/theme"
+import { ThemeProvider, addTheme, useTheme } from "./context/theme"
+import { loadUserThemes } from "./context/theme/loader"
 import { useBindings } from "./lib/keymap"
 import { Chat } from "./panes/chat/Chat"
 import { FileTree } from "./panes/filetree"
@@ -1928,6 +1929,14 @@ function App(props: AppDeps) {
  * `<App />`. Replaces `tui/index.tsx`'s previous banner mount.
  */
 export async function startApp(): Promise<void> {
+  // Register user-installed themes (`~/.kobe/themes/*.json`) BEFORE the
+  // ThemeProvider mounts. ThemeProvider's `init` reads the active theme
+  // out of the registry; if the user persisted a theme that lives in a
+  // user file, it has to exist by registry time or the provider falls
+  // back to the bundled default. Sync — see loader.ts header for why.
+  for (const { name, theme } of loadUserThemes()) {
+    addTheme(name, theme)
+  }
   const engine = await buildEngine()
   const homeDir = process.env.KOBE_HOME_DIR ?? homedir()
   const store = new TaskIndexStore({ homeDir })
