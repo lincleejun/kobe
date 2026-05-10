@@ -83,8 +83,11 @@ import {
 import type { TaskIndexStore, TaskIndexUnsubscribe } from "./index/store.ts"
 import { ulid } from "./index/ulid.ts"
 import { MetadataSuggester } from "./metadata-suggester.ts"
+import { InMemoryPendingInputBroker } from "./pending-input-broker.ts"
 import { gatherPRState, loadPRInstructionsTemplate, renderPRInstructions } from "./pr/index.ts"
+import { SessionPump } from "./session-pump.ts"
 import type { GitWorktreeManager } from "./worktree/manager.ts"
+import type { PendingInputBroker } from "../types/pending-input-broker.ts"
 
 /** DI surface for the orchestrator. Tests pass test doubles here. */
 export interface OrchestratorDeps {
@@ -314,23 +317,25 @@ export class Orchestrator {
   /** Background pump promises — kept so tests can `await` settle. */
   private readonly pumps = new Map<string, Promise<void>>()
   /**
-   * Pending user-input requests, keyed by taskId then by requestId.
-   * Populated when the engine emits a tool that pauses for user input
-   * (currently `ExitPlanMode`); cleared in `respondToInput` when the
-   * user answers. Not persisted — request state is per-process.
+   * Pending user-input requests. Pulled out into a {@link PendingInputBroker}
+   * adapter so the same shape can be replicated wire-side by
+   * RemoteOrchestrator — see `src/types/pending-input-broker.ts` for the
+   * seam rationale.
+   *
+   * The broker owns both the per-task bucket and the requestId-to-tabKey
+   * side index that bumpRunState reads. Not persisted — request state is
+   * per-process by design.
    */
-  private readonly pendingInput = new Map<TaskId, Map<string, UserInputPayload>>()
-  /**
-   * Side index from `requestId` to the composite tabKey of the chat tab
-   * that fired the pause. The main `pendingInput` map is keyed at the
-   * task level (see comment above), but the run-state dot needs per-tab
-   * attribution so a multi-tab task can show yellow on the asking tab
-   * and green on a sibling that's still streaming. Cleared in lockstep
-   * with the bucket entries in `respondToInput`.
-   */
-  private readonly pendingInputRequestTab = new Map<string, string>()
+  private readonly pendingInputBroker: PendingInputBroker = new InMemoryPendingInputBroker()
   /** Counter for generating unique requestIds across the orchestrator's lifetime. */
   private requestIdCounter = 0
+  /**
+   * Per-session driver. The pump is stateless across runs; we hold
+   * one instance for the orchestrator's lifetime and reuse it for
+   * every `runTask` (one pump.run() call per (Task, ChatTab) run).
+   * Constructed in the constructor so the deps closure is built once.
+   */
+  private sessionPump!: SessionPump
   /**
    * Process-scoped record of branch/baseRef the user picked at
    * `createTask` time but hasn't committed to disk yet (we allocate
@@ -385,6 +390,18 @@ export class Orchestrator {
     const [runState, setRunState] = createSignal<ReadonlyMap<string, ChatRunState>>(new Map())
     this.runStateAcc = runState
     this.setRunState = (next) => setRunState(() => next)
+
+    // Build the SessionPump with a closure over orchestrator-owned
+    // deps. Pump never touches `handles` / `pumps` / `store` directly
+    // — it returns a result and the orchestrator does the post-run
+    // bookkeeping in `runPumpAndCleanup`.
+    this.sessionPump = new SessionPump({
+      engine: this.engine,
+      broker: this.pendingInputBroker,
+      dispatch: (taskId, tabId, ev) => this.dispatchEvent(taskId as TaskId, tabId, ev),
+      nextRequestId: () => `req-${++this.requestIdCounter}`,
+      onPendingInputChange: () => this.bumpRunState(),
+    })
   }
 
   /**
@@ -401,7 +418,7 @@ export class Orchestrator {
    */
   private bumpRunState(): void {
     const next = new Map<string, ChatRunState>()
-    for (const tabKey of this.pendingInputRequestTab.values()) {
+    for (const tabKey of this.pendingInputBroker.awaitingTabKeys()) {
       next.set(tabKey, "awaiting_input")
     }
     for (const key of this.handles.keys()) {
@@ -461,9 +478,7 @@ export class Orchestrator {
    * orchestrator state.
    */
   peekPendingInput(id: TaskId | string): Array<{ requestId: string; payload: UserInputPayload }> {
-    const bucket = this.pendingInput.get(id as TaskId)
-    if (!bucket) return []
-    return Array.from(bucket.entries()).map(([requestId, payload]) => ({ requestId, payload }))
+    return this.pendingInputBroker.snapshot(String(id))
   }
 
   /**
@@ -850,7 +865,7 @@ export class Orchestrator {
 
     // Spin the pump. Captures `key` so the closure references the
     // right tab even if the user spawns more concurrently.
-    const pump = this.pumpEvents(task.id, targetTab.id, handle)
+    const pump = this.runPumpAndCleanup(task.id, targetTab.id, handle)
     this.pumps.set(key, pump)
     // Don't await — the caller wants to return as soon as the engine
     // is started, not when it finishes. The pump runs to completion in
@@ -941,12 +956,9 @@ export class Orchestrator {
    */
   async respondToInput(id: TaskId | string, requestId: string, response: UserInputResponse): Promise<void> {
     const task = this.requireTask(id)
-    const bucket = this.pendingInput.get(task.id)
-    const pending = bucket?.get(requestId)
-    if (!pending || !bucket) return
-    bucket.delete(requestId)
-    if (bucket.size === 0) this.pendingInput.delete(task.id)
-    this.pendingInputRequestTab.delete(requestId)
+    const resolved = this.pendingInputBroker.resolve(task.id, requestId)
+    if (!resolved) return
+    const pending = resolved.payload
     this.bumpRunState()
 
     // Tell the chat the row is no longer pending. Fire BEFORE runTask
@@ -1258,6 +1270,10 @@ export class Orchestrator {
       }
     }
 
+    // Drop any pending-input entries still attributed to this task —
+    // a delete mid-pause used to leak them into the broker forever.
+    this.pendingInputBroker.clearForTask(task.id)
+
     await this.store.remove(task.id)
   }
 
@@ -1552,118 +1568,55 @@ export class Orchestrator {
     }
   }
 
-  private async pumpEvents(taskId: TaskId, tabId: string, handle: SessionHandle): Promise<void> {
+  /**
+   * Run the {@link SessionPump} for one (Task, ChatTab) handle and
+   * then do the orchestrator-side bookkeeping the pump can't do for
+   * itself: drop the handle from the registry, recompute the
+   * run-state signal, write a terminal task status when every
+   * sibling tab has stopped, and dispatch the buffered terminal
+   * event downstream.
+   *
+   * Sequencing is load-bearing:
+   *   1. handles.delete BEFORE the `stillLive` check — so the count
+   *      reflects "still live siblings" not "including me."
+   *   2. store.update(status) BEFORE the terminal-event dispatch —
+   *      a chat subscriber reacting to `done` by queuing a follow-up
+   *      `runTask` must see the post-terminal status, not the
+   *      mid-rename state.
+   *   3. handles.delete BEFORE bumpRunState — so the run-state map
+   *      doesn't show this tab as running after it terminated.
+   */
+  private async runPumpAndCleanup(taskId: TaskId, tabId: string, handle: SessionHandle): Promise<void> {
     const key = tabKey(taskId, tabId)
-    let killedForInput = false
-    // Buffer the terminal `done`/`error` event so we can dispatch it
-    // ONLY after engine cleanup + store-status write are both fully
-    // settled. Otherwise downstream subscribers (the chat's queue-drain
-    // effect, in particular) react to `done` while the registry still
-    // holds the just-finished sessionId AND the store.save is mid-
-    // rename — the next resume() throws "duplicate sessionId" and the
-    // next status update collides on `tasks.json.tmp` rename. See the
-    // mid-stream queue/steer feature: that race is invisible without
-    // a queued follow-up prompt waiting on `done` to fire.
-    let terminalEvent: EngineEvent | null = null
-    try {
-      for await (const ev of this.engine.stream(handle)) {
-        // Detect tools that pause for user input. Piggyback on
-        // `tool.start` so the UI surfaces the approval banner without
-        // waiting for the tool's file write to complete in the subprocess.
-        const inputReq = detectUserInputFromEngineEvent(ev)
-        if (inputReq) {
-          this.dispatchEvent(taskId, tabId, ev)
-          const requestId = `req-${++this.requestIdCounter}`
-          let bucket = this.pendingInput.get(taskId)
-          if (!bucket) {
-            bucket = new Map()
-            this.pendingInput.set(taskId, bucket)
-          }
-          bucket.set(requestId, inputReq)
-          // Record the firing tab so the run-state dot can attribute
-          // the pause to the right chat-tab chip. Cleared in lockstep
-          // with the bucket entry in respondToInput.
-          this.pendingInputRequestTab.set(requestId, key)
-          this.bumpRunState()
-          this.dispatchEvent(taskId, tabId, {
-            type: "user_input.request",
-            requestId,
-            payload: inputReq,
-          })
-          // STOP the subprocess. In `claude -p` mode the user-input
-          // tools (ExitPlanMode, AskUserQuestion) return immediately
-          // with empty/default answers and the model just keeps yapping
-          // past the request — the picker shows up AFTER the model's
-          // "looks like you didn't answer" text. Killing here freezes
-          // the conversation at the request; respondToInput resumes the
-          // same session via --resume with the user's actual answer.
-          // Distinct from a `done`/`error` terminal so the finally
-          // block doesn't write a terminal status — task stays in
-          // in_progress while we wait for the user.
-          killedForInput = true
-          try {
-            await this.engine.stop(handle)
-          } catch {
-            /* best-effort kill; the for-await still ends */
-          }
-          break
-        }
-        if (ev.type === "done" || ev.type === "error") {
-          // Buffer the terminal event; dispatch happens in the finally
-          // after we've awaited engine cleanup + store writes.
-          terminalEvent = ev
-          continue
-        }
-        this.dispatchEvent(taskId, tabId, ev)
-      }
-    } finally {
-      // Force engine cleanup so the registry slot for this sessionId
-      // is freed before any subscriber reacts to `done`. Idempotent —
-      // for natural done, registry.kill short-circuits because the
-      // proc already exited; the parse loop's own finally also
-      // unregisters, but we can't await *that* directly so we call
-      // stop() to bound the timing.
-      if (!killedForInput) {
+    const { terminalEvent, killedForInput } = await this.sessionPump.run(taskId, tabId, handle)
+
+    this.handles.delete(key)
+    this.pumps.delete(key)
+    this.bumpRunState()
+
+    const terminal = terminalEvent?.type === "error" ? "error" : terminalEvent ? "done" : null
+    if (terminal && !killedForInput) {
+      // Only flip the task's status to a terminal value when ALL its
+      // tabs have stopped. With multi-tab, a single tab finishing
+      // doesn't mean the task is done — the user may still have other
+      // tabs streaming.
+      const stillLive = Array.from(this.handles.keys()).some((k) => k.startsWith(`${taskId}:`))
+      if (!stillLive) {
         try {
-          await this.engine.stop(handle)
+          await this.store.update(taskId, { status: terminal === "done" ? "done" : "error" })
         } catch {
-          /* best-effort */
+          /* store may have been cleared in tests; ignore */
         }
       }
-      // Drop the handle whether we exited cleanly or via throw.
-      this.handles.delete(key)
-      this.pumps.delete(key)
-      this.bumpRunState()
-      const terminal = terminalEvent?.type === "error" ? "error" : terminalEvent ? "done" : null
-      if (terminal && !killedForInput) {
-        // Only flip the task's status to a terminal value when ALL
-        // its tabs have stopped. With multi-tab, a single tab finishing
-        // doesn't mean the task is done — the user may still have other
-        // tabs streaming. We check after delete-from-handles above so
-        // the count reflects "still live siblings."
-        const stillLive = Array.from(this.handles.keys()).some((k) => k.startsWith(`${taskId}:`))
-        if (!stillLive) {
-          try {
-            await this.store.update(taskId, {
-              status: terminal === "done" ? "done" : "error",
-            })
-          } catch {
-            /* store may have been cleared in tests; ignore */
-          }
-        }
-      }
-      // Now (and only now) dispatch the terminal event downstream.
-      // Subscribers reacting to `done` see the engine + store fully
-      // settled, so a queued follow-up runTask can re-spawn / resume
-      // without colliding on sessionId or `tasks.json.tmp`.
-      if (terminalEvent && !killedForInput) {
-        this.dispatchEvent(taskId, tabId, terminalEvent)
-      }
-      // killedForInput case: leave status as in_progress — the user is
-      // about to answer and we'll resume via respondToInput → runTask.
-      // The store's listener bus refreshes the signal automatically on
-      // the `update` above. No explicit refresh needed here.
     }
+
+    // Dispatch the terminal event downstream. Subscribers reacting
+    // to `done` now see the engine registry + store fully settled.
+    if (terminalEvent && !killedForInput) {
+      this.dispatchEvent(taskId, tabId, terminalEvent)
+    }
+    // killedForInput case: leave status as in_progress — the user is
+    // about to answer and we'll resume via respondToInput → runTask.
   }
 }
 

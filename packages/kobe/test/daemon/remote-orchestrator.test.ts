@@ -74,9 +74,13 @@ describe("RemoteOrchestrator", () => {
       // Synthesize a pending-input bucket entry directly. The fake
       // engine doesn't run user-input tools, so we plant the state the
       // way the orchestrator would after detecting one at runtime.
-      const pendingInternal = (orch as unknown as {
-        pendingInput: Map<string, Map<string, unknown>>
-      }).pendingInput
+      // Records through the broker now that the orchestrator delegates
+      // its pending-input bucket — see `src/orchestrator/pending-input-broker.ts`.
+      const broker = (orch as unknown as {
+        pendingInputBroker: {
+          record: (taskId: string, tabKey: string, requestId: string, payload: unknown) => void
+        }
+      }).pendingInputBroker
       const requestId = "req-test-1"
       const payload = {
         kind: "approve_plan" as const,
@@ -84,7 +88,7 @@ describe("RemoteOrchestrator", () => {
         toolName: "ExitPlanMode",
         toolUseId: "tool-1",
       }
-      pendingInternal.set(spawned.taskId, new Map([[requestId, payload]]))
+      broker.record(spawned.taskId, `${spawned.taskId}:${task.activeTabId}`, requestId, payload)
       // Now attach a fresh remote — init() should pick up the pending
       // request on its own.
       remote = new RemoteOrchestrator(remoteClient)

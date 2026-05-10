@@ -1,5 +1,6 @@
 import { type Accessor, createSignal } from "solid-js"
 import { type ChatRunState, type Orchestrator, type Unsubscribe, chatRunStateKey } from "../orchestrator/core.ts"
+import { InMemoryPendingInputBroker } from "../orchestrator/pending-input-broker.ts"
 import type {
   Message,
   OrchestratorEvent,
@@ -8,6 +9,7 @@ import type {
   UserInputPayload,
   UserInputResponse,
 } from "../types/engine.ts"
+import type { PendingInputBroker } from "../types/pending-input-broker.ts"
 import type { ChatTab, Task } from "../types/task.ts"
 import type { KobeDaemonClient } from "./index.ts"
 
@@ -21,15 +23,21 @@ export class RemoteOrchestrator {
   private readonly setRunState: (next: ReadonlyMap<string, ChatRunState>) => void
   private readonly subscribers = new Map<string, Set<(ev: OrchestratorEvent) => void>>()
   /**
-   * Mirror of the daemon's per-task pending-input bucket. Hydrated on
-   * `init()` via `chat.input.pending` round-trips, then maintained
+   * Wire-fed replica of the daemon's pending-input bucket. Same
+   * adapter as the local Orchestrator uses — see
+   * `src/types/pending-input-broker.ts` for the seam rationale. Filled
+   * on `init()` via `chat.input.pending` per task, then maintained
    * forward by listening to `user_input.request` / `user_input.resolved`
-   * events on the wire. Keeps `peekPendingInput` honest for clients
-   * that attach mid-session — a TUI joining while a task is
-   * `awaiting_input` for an ExitPlanMode / AskUserQuestion needs to see
-   * the pending request to lock the composer and render the picker.
+   * wire events.
+   *
+   * Hydrated entries use the task's `activeTabId` as a fallback tabKey
+   * because the daemon's `chat.input.pending` response doesn't carry
+   * it. That's acceptable today because nothing on the remote side
+   * reads `awaitingTabKeys()` — run-state is driven by event handlers
+   * that already know the tabId. If a future caller needs accurate
+   * tabKeys from hydration, extend the daemon protocol to echo them.
    */
-  private readonly pendingInputs = new Map<string, PendingInput[]>()
+  private readonly pendingInputBroker: PendingInputBroker = new InMemoryPendingInputBroker()
 
   constructor(private readonly client: KobeDaemonClient) {
     const [tasks, setTasks] = createSignal<Task[]>([])
@@ -58,7 +66,10 @@ export class RemoteOrchestrator {
           const pending = await this.client.request<{ pending: PendingInput[] }>("chat.input.pending", {
             taskId: task.id,
           })
-          if (pending.pending.length > 0) this.pendingInputs.set(task.id, [...pending.pending])
+          const fallbackTabKey = `${task.id}:${task.activeTabId}`
+          for (const entry of pending.pending) {
+            this.pendingInputBroker.record(task.id, fallbackTabKey, entry.requestId, entry.payload)
+          }
         } catch {
           /* per-task hydration is best-effort */
         }
@@ -231,8 +242,7 @@ export class RemoteOrchestrator {
   }
 
   peekPendingInput(taskId: string): PendingInput[] {
-    const bucket = this.pendingInputs.get(taskId)
-    return bucket ? bucket.slice() : []
+    return this.pendingInputBroker.snapshot(taskId)
   }
 
   private handleEvent(name: string, payload: unknown): void {
@@ -255,7 +265,7 @@ export class RemoteOrchestrator {
       const taskId = obj.taskId as string | undefined
       if (taskId) {
         this.setTasks(this.tasksAcc().filter((t) => t.id !== taskId))
-        this.pendingInputs.delete(taskId)
+        this.pendingInputBroker.clearForTask(taskId)
       }
       return
     }
@@ -284,28 +294,14 @@ export class RemoteOrchestrator {
       if (!ev) return
       if (ev.type === "user_input.request") {
         this.markRunState(taskId, tabId, "awaiting_input")
-        this.recordPendingInput(taskId, ev.requestId, ev.payload)
+        this.pendingInputBroker.record(taskId, `${taskId}:${tabId}`, ev.requestId, ev.payload)
       }
       if (ev.type === "user_input.resolved") {
         this.clearRunState(taskId, tabId)
-        this.dropPendingInput(taskId, ev.requestId)
+        this.pendingInputBroker.resolve(taskId, ev.requestId)
       }
       this.dispatch(taskId, tabId, ev)
     }
-  }
-
-  private recordPendingInput(taskId: string, requestId: string, payload: UserInputPayload): void {
-    const existing = this.pendingInputs.get(taskId) ?? []
-    if (existing.some((p) => p.requestId === requestId)) return
-    this.pendingInputs.set(taskId, [...existing, { requestId, payload }])
-  }
-
-  private dropPendingInput(taskId: string, requestId: string): void {
-    const existing = this.pendingInputs.get(taskId)
-    if (!existing) return
-    const next = existing.filter((p) => p.requestId !== requestId)
-    if (next.length === 0) this.pendingInputs.delete(taskId)
-    else this.pendingInputs.set(taskId, next)
   }
 
   private upsertTask(task: Task): void {
