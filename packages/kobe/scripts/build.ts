@@ -27,9 +27,11 @@ const result = await Bun.build({
   // `ensureSolidTransformPlugin` is what `--preload` uses for the dev
   // runtime, but Bun.build only honours plugins passed in this list.
   plugins: [createSolidTransformPlugin()],
-  // Keep node-pty / fs / etc. external — they're either Bun built-ins
-  // or native modules that don't bundle.
-  external: ["node-pty"],
+  // Keep native/runtime-resolved packages external. @opentui/core loads
+  // @opentui/core-${platform}-${arch} dynamically; bundling core moves
+  // that dynamic import into dist/index.js, where Bun can no longer
+  // resolve the optional platform package under isolated installs.
+  external: ["node-pty", "@opentui/core"],
 })
 
 if (!result.success) {
