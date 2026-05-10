@@ -847,18 +847,31 @@ function stringifyErr(err: unknown): string {
  * finds queued prompts at the same eye-line as the live status row,
  * not buried inside the scrollback.
  *
+ * Caps the visible rows at {@link QUEUE_VISIBLE_CAP} so a fast typist
+ * who queued 30 prompts doesn't push the composer off-screen. Excess
+ * shows as a single muted `+ … N more queued` summary row at the
+ * bottom — same shape claude-code uses for its task-notification
+ * overflow (`refs/claude-code/src/components/PromptInput/
+ * PromptInputQueuedCommands.tsx:33-40`). The full queue still lives
+ * in state; cancellation just isn't reachable for hidden rows until
+ * earlier ones drain or get cancelled.
+ *
  * Tone is intentionally muted: queued prompts haven't reached the
  * model yet, so we don't paint them as accent-coloured the way an
  * in-flight user message gets the `theme.accent` `>` chip.
  */
+const QUEUE_VISIBLE_CAP = 4
+
 function QueuedPromptList(props: {
   queue: readonly { id: string; text: string }[]
   onCancel: (id: string) => void
 }) {
   const { theme } = useTheme()
+  const visible = () => props.queue.slice(0, QUEUE_VISIBLE_CAP)
+  const hidden = () => Math.max(0, props.queue.length - QUEUE_VISIBLE_CAP)
   return (
     <box flexDirection="column" gap={0} paddingTop={1} paddingLeft={1} paddingRight={1}>
-      <For each={props.queue}>
+      <For each={visible()}>
         {(entry, idx) => (
           <box flexDirection="row" gap={1} alignItems="flex-start">
             <text fg={theme.textMuted} attributes={TextAttributes.BOLD}>
@@ -882,6 +895,14 @@ function QueuedPromptList(props: {
           </box>
         )}
       </For>
+      <Show when={hidden() > 0}>
+        <box flexDirection="row" gap={1} alignItems="flex-start">
+          <text fg={theme.textMuted} attributes={TextAttributes.BOLD}>
+            +
+          </text>
+          <text fg={theme.textMuted}>{`… ${hidden()} more queued`}</text>
+        </box>
+      </Show>
     </box>
   )
 }
