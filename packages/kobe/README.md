@@ -89,9 +89,29 @@ you want a parallel sub-conversation without losing the main thread.
 
 For the full feature manifest, see [`CHANGELOG.md`](./CHANGELOG.md).
 
+## Custom themes
+
+kobe ships a handful of bundled themes (`claude` is the default), and any JSON
+file you drop into `~/.kobe/themes/` is auto-loaded at boot and shows up in
+Settings → Theme alongside the built-ins. Themes are publishable as raw JSON
+on GitHub and installed with one command:
+
+```bash
+kobe theme add https://raw.githubusercontent.com/<you>/<repo>/main/<your-theme>.json
+kobe theme list
+kobe theme remove <name>
+```
+
+A JSON Schema at [`packages/kobe/src/tui/context/theme/theme.schema.json`](./src/tui/context/theme/theme.schema.json)
+gives editor autocomplete — reference it via `"$schema"` in your theme file.
+
+Full guide (shape, examples, GitHub publishing flow):
+[`docs/themes.md`](../../docs/themes.md).
+
 ## Where things live
 
 - Tasks: `~/.kobe/tasks.json`
+- User themes: `~/.kobe/themes/*.json`
 - Per-task worktrees: `<repo>/.claude/worktrees/<task-id>/`
 - UI state (theme, sidebar widths, last-active task): kobe's KV store, also under `~/.kobe/`
 

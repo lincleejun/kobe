@@ -25,6 +25,7 @@ If you're here to **work on it**, the orientation docs are at the repo root:
 - [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) — where each piece of code lives, and why
 - [`docs/PLAN.md`](./docs/PLAN.md) — phase / wave plan and gate history
 - [`docs/HARNESS.md`](./docs/HARNESS.md) — the agent self-test contract
+- [`docs/themes.md`](./docs/themes.md) — user-installable themes (`~/.kobe/themes/` + `kobe theme add <url>`)
 
 ## Repo-level scripts
 
