@@ -93,6 +93,18 @@ export async function* parseStreamJson(lines: LineSource, opts: ParseStreamJsonO
     const type = typeof msg.type === "string" ? (msg.type as string) : undefined
     if (!type) continue
 
+    // Subagent events carry `parent_tool_use_id` set to the parent's
+    // Agent/Task tool_use id. Their assistant text/tool_use and user
+    // tool_result blocks are the subagent's *internal* work — the
+    // parent's chat already sees the Agent tool_use (input) and its
+    // matching tool_result (the subagent's final summary). Letting the
+    // internal blocks through would interleave the subagent's Glob /
+    // Read / Bash banners with the parent's transcript and bury the
+    // Agent row under noise. Drop them at the parser. Only events with
+    // `parent_tool_use_id: null` (or absent) belong to the top-level
+    // session.
+    if ("parent_tool_use_id" in msg && msg.parent_tool_use_id != null) continue
+
     if (type === "system") {
       const subtype = typeof msg.subtype === "string" ? (msg.subtype as string) : undefined
       if (subtype === "init" && !sessionIdEmitted) {

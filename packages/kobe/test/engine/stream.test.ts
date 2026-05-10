@@ -149,6 +149,79 @@ describe("parseStreamJson", () => {
     expect(events).toEqual([{ type: "done" }])
   })
 
+  it("filters subagent events by parent_tool_use_id so internal Glob/Read banners don't leak into the parent transcript", async () => {
+    // Real shape captured from `claude -p ... --output-format stream-json`
+    // with the Agent tool. Parent's Agent tool_use has parent_tool_use_id:
+    // null. The subagent's own assistant tool_use (Glob) and user
+    // tool_result both carry parent_tool_use_id: <parent's Agent id>.
+    // The parser must drop the subagent blocks; only the parent's Agent
+    // tool.start / tool.result should reach the chat.
+    const parentAgentId = "toolu_018ZVWhh"
+    const events = await collect(
+      parseStreamJson(
+        linesFrom([
+          // parent: Agent tool_use
+          JSON.stringify({
+            type: "assistant",
+            parent_tool_use_id: null,
+            message: {
+              content: [
+                {
+                  type: "tool_use",
+                  id: parentAgentId,
+                  name: "Agent",
+                  input: { description: "find md files", subagent_type: "Explore", prompt: "find" },
+                },
+              ],
+            },
+          }),
+          // subagent: its prompt as a `user` text block — must be ignored
+          JSON.stringify({
+            type: "user",
+            parent_tool_use_id: parentAgentId,
+            message: { content: [{ type: "text", text: "find md files" }] },
+          }),
+          // subagent: assistant tool_use (Glob) — must be ignored
+          JSON.stringify({
+            type: "assistant",
+            parent_tool_use_id: parentAgentId,
+            message: {
+              content: [{ type: "tool_use", id: "toolu_glob", name: "Glob", input: { pattern: "*.md" } }],
+            },
+          }),
+          // subagent: tool_result for Glob — must be ignored
+          JSON.stringify({
+            type: "user",
+            parent_tool_use_id: parentAgentId,
+            message: {
+              content: [{ type: "tool_result", tool_use_id: "toolu_glob", content: "a.md\nb.md" }],
+            },
+          }),
+          // parent: Agent tool_result (subagent's wrap-up)
+          JSON.stringify({
+            type: "user",
+            parent_tool_use_id: null,
+            message: {
+              content: [
+                { type: "tool_result", tool_use_id: parentAgentId, content: "found 2 .md files" },
+              ],
+            },
+          }),
+          JSON.stringify({ type: "result", subtype: "success" }),
+        ]),
+      ),
+    )
+    expect(events).toEqual([
+      {
+        type: "tool.start",
+        name: "Agent",
+        input: { description: "find md files", subagent_type: "Explore", prompt: "find" },
+      },
+      { type: "tool.result", name: "Agent", output: "found 2 .md files" },
+      { type: "done" },
+    ])
+  })
+
   it("handles bare top-level content array (no inner message wrapper)", async () => {
     // Some claude versions emit `{ type: "assistant", content: [...] }`
     // directly — our extractor accepts both shapes.
