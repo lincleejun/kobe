@@ -8,7 +8,7 @@
   "packageManager": "bun@1.3.13",
   "workspaces": ["packages/*"],
   "scripts": {
-    "dev": "bun --filter @sma1lboy/kobe dev",
+    "dev": "cd packages/kobe && bun run dev",
     "build": "bun --filter @sma1lboy/kobe build",
     "typecheck": "bun --filter @sma1lboy/kobe typecheck",
     "test": "bun --filter @sma1lboy/kobe test",
