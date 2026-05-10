@@ -48,18 +48,39 @@ export class RemoteOrchestrator {
   }
 
   async init(): Promise<void> {
-    await this.client.request("hello", { clientId: `tui-${process.pid}`, version: "1" })
-    const res = await this.client.request<{ tasks: Task[] }>("task.list")
-    this.setTasks(res.tasks)
+    // `hello` now returns tasks + pending-input snapshots inline so a
+    // fresh attach is two round-trips (hello + subscribe) instead of
+    // 2 + N. Old daemons that don't echo `tasks`/`pending` fall back
+    // to the legacy `task.list` + per-task `chat.input.pending` path.
+    const hello = await this.client.request<{
+      tasks?: Task[]
+      pending?: Record<string, PendingInput[]>
+    }>("hello", { clientId: `tui-${process.pid}`, version: "1" })
+
+    let tasks: Task[]
+    if (hello.tasks) {
+      tasks = hello.tasks
+    } else {
+      const res = await this.client.request<{ tasks: Task[] }>("task.list")
+      tasks = res.tasks
+    }
+    this.setTasks(tasks)
     await this.client.request("subscribe", { taskIds: "all" })
-    // Hydrate pending-input snapshots per task. Cheap (one round-trip
-    // per task) and run in parallel; if a task has no pending requests
-    // the daemon returns `pending: []` and we just leave the local
-    // bucket empty. Failures per task are non-fatal — the worst case
-    // is the composer doesn't lock until the next user_input.request
-    // arrives over the wire, same as before this hydration existed.
+
+    if (hello.pending) {
+      for (const [taskId, entries] of Object.entries(hello.pending)) {
+        for (const entry of entries) {
+          this.pendingInputBroker.record(taskId, entry.tabKey, entry.requestId, entry.payload)
+        }
+      }
+      return
+    }
+
+    // Legacy fallback: ask each task individually. Run in parallel;
+    // per-task failures are non-fatal — worst case the composer
+    // doesn't lock until the next user_input.request arrives.
     await Promise.all(
-      res.tasks.map(async (task) => {
+      tasks.map(async (task) => {
         try {
           const pending = await this.client.request<{ pending: PendingInput[] }>("chat.input.pending", {
             taskId: task.id,
