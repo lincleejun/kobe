@@ -64,6 +64,13 @@ export type Theme = {
   backgroundPanel: RGBA
   backgroundElement: RGBA
   backgroundMenu: RGBA
+  /**
+   * Modal/dialog card surface. Stays opaque even in transparent mode
+   * (panels go transparent so the host terminal shows through, but
+   * a modal's whole point is to stand on top with readable content).
+   * Falls back to `backgroundPanel` at theme-resolution time.
+   */
+  backgroundDialog: RGBA
   border: RGBA
   borderActive: RGBA
   borderSubtle: RGBA
@@ -172,6 +179,7 @@ export function resolveTheme(theme: ThemeJson, mode: "dark" | "light" = "dark"):
     backgroundPanel: out.backgroundPanel ?? background,
     backgroundElement: out.backgroundElement ?? background,
     backgroundMenu: out.backgroundMenu ?? out.backgroundElement ?? background,
+    backgroundDialog: out.backgroundDialog ?? out.backgroundPanel ?? background,
     border: out.border ?? text,
     borderActive: out.borderActive ?? out.border ?? text,
     borderSubtle: out.borderSubtle ?? out.border ?? text,

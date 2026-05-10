@@ -73,7 +73,12 @@ export function Dialog(
         }}
         width={width()}
         maxWidth={dimensions().width - 2}
-        backgroundColor={theme.backgroundPanel}
+        // Modals stay opaque even in transparent mode — the user's
+        // terminal can show through the page panels (sidebar / chat
+        // background), but a dialog's content needs a solid surface
+        // to read against. `backgroundDialog` is exempt from the
+        // transparent override (see context/theme.tsx).
+        backgroundColor={theme.backgroundDialog}
         paddingTop={1}
       >
         {props.children}
