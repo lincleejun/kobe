@@ -29,7 +29,7 @@ The `AIEngine` interface in `src/types/engine.ts`. The single declared pluggabil
 _Avoid_: backend, adapter, provider, vendor.
 
 **Orchestrator**:
-The thing wiring **AI Engine Port** + git + task index. Lives in `src/orchestrator/core.ts`. The one place that knows about all three.
+The thing wiring **AI Engine Port** + git + task index. Lives in `src/orchestrator/core.ts`. The one place that knows about all three. TUI-free: depends on Solid signals as a reactive primitive but never on opentui or any rendering, so the **Daemon** can host it headless.
 _Avoid_: manager, coordinator, controller, service.
 
 **SessionPump** (or **Pump**):

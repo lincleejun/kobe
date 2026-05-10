@@ -190,6 +190,8 @@ The events are normalized — we don't leak Claude Code's stream-json shape into
 - **Background workers**: one per running task, draining the engine's stream into the sync store.
 - **Sidebar tree**: groups tasks by status (matching Conductor's grouping); optionally by repo at a higher level when many repos are open.
 
+The orchestrator stays **TUI-free**: no imports from `@opentui/*` or anything that renders. Solid signals are allowed as an in-process reactive primitive (the TUI subscribes to the same signals), but the daemon must be runnable headless. This is the seam Wave D0 of the daemon split formalises — see [`design/daemon.md`](./design/daemon.md) §9.
+
 ---
 
 ## 6. Pluggability — and the engine port

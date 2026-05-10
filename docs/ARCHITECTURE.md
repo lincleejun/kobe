@@ -59,10 +59,16 @@ The seams matter:
 - **Panes never reach past the orchestrator.** Chat, sidebar, etc. consume
   `Orchestrator` (`src/tui/app.tsx:32`) and ask it for tasks, history,
   events. They don't import `engine` or `worktree` directly.
-- **Solid + opentui are infrastructure, not architecture.** Whenever a
-  pane needs to *do* something stateful (run a task, switch tabs,
-  persist), it goes through the orchestrator. Solid signals are wiring,
-  not the source of truth.
+- **opentui is infrastructure, not architecture; Solid signals are a
+  shared reactive primitive.** The orchestrator must not depend on
+  opentui or anything that renders — that's the seam the daemon split
+  hangs on (see [`design/daemon.md`](./design/daemon.md) §9 D0). Solid
+  signals are deliberately allowed inside the orchestrator: they're a
+  pure in-process reactive primitive with no DOM / no opentui coupling,
+  and the TUI consumes the same primitive so panes can subscribe
+  without an adapter layer. Whenever a pane needs to *do* something
+  stateful (run a task, switch tabs, persist), it still goes through
+  the orchestrator — signals are wiring, not the source of truth.
 
 ### File ownership cheat sheet
 
