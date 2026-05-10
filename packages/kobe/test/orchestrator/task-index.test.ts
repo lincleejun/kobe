@@ -343,6 +343,33 @@ describe("TaskIndexStore — atomic write & corruption recovery", () => {
     await expect(stat(`${store.filePath}.tmp`)).rejects.toMatchObject({ code: "ENOENT" })
   })
 
+  test("concurrent saves serialise without ENOENT on the shared tmp path", async () => {
+    // Regression: two writers racing on `tasks.json.tmp` would each
+    // open + write + rename it; the second rename would ENOENT because
+    // the first already moved the tmp away. Surfaced after KOB-15
+    // when the boot-time `ensureMainTask` loop landed alongside
+    // UI-driven updates on the same tick. Fix is the saveChain serial.
+    const store = new TaskIndexStore({ homeDir })
+    await store.load()
+    const created = await store.create({
+      title: "seed",
+      repo: "/r",
+      branch: "kobe/seed",
+      worktreePath: "/r/seed",
+      sessionId: null,
+      status: "backlog",
+    })
+    // Fire 20 updates without awaiting each individually — they all
+    // hit save() at roughly the same tick.
+    const writes = Array.from({ length: 20 }, (_, i) => store.update(created.id, { title: `v${i}` }))
+    await expect(Promise.all(writes)).resolves.not.toThrow()
+    // Last write wins; tmp is cleaned up.
+    const onDisk = JSON.parse(await readFile(store.filePath, "utf8"))
+    expect(onDisk.tasks).toHaveLength(1)
+    expect(onDisk.tasks[0].title).toBe("v19")
+    await expect(stat(`${store.filePath}.tmp`)).rejects.toMatchObject({ code: "ENOENT" })
+  })
+
   test("non-object root JSON recovers as empty", async () => {
     await mkdir(join(homeDir, ".kobe"), { recursive: true })
     await writeFile(join(homeDir, ".kobe", "tasks.json"), '"not an object"', "utf8")

@@ -92,6 +92,18 @@ export class TaskIndexStore {
   private cache: { version: 2; tasks: Task[] } = { version: 2, tasks: [] }
   private loaded = false
   private listeners = new Set<TaskIndexListener>()
+  /**
+   * Serialised save chain. Every `save()` awaits the previous one before
+   * touching the shared `tasks.json.tmp` path; without this, two
+   * concurrent writers stomp each other and the second `rename(tmp →
+   * target)` fails with ENOENT because the first already moved the tmp
+   * away. Exposed by the boot-time `ensureMainTask` loop in app.tsx
+   * landing alongside UI-driven `update`s on the same tick. Failed
+   * saves don't poison the chain — we catch on the chain's tail so the
+   * next caller still runs, while the original rejection still
+   * propagates to its own caller.
+   */
+  private saveChain: Promise<void> = Promise.resolve()
 
   constructor(options: TaskIndexStoreOptions = {}) {
     this.homeDir = options.homeDir ?? homedir()
@@ -182,25 +194,25 @@ export class TaskIndexStore {
 
   /**
    * Persist the in-memory cache to disk. Atomic: writes to tmp, fsyncs,
-   * renames over target.
+   * renames over target. Serialised across concurrent callers via
+   * `saveChain` — the shared tmp path can't tolerate overlap.
    */
   async save(): Promise<void> {
     this.assertLoaded()
+    const next = this.saveChain.then(() => this.doSave())
+    this.saveChain = next.catch(() => {})
+    return next
+  }
+
+  private async doSave(): Promise<void> {
     await mkdir(dirname(this.path), { recursive: true })
 
     const payload: TaskIndex = this.snapshot()
     const json = `${JSON.stringify(payload, null, 2)}\n`
 
-    // open + writeFile + sync + close, then rename. We open the tmp
-    // ourselves (rather than calling writeFile) so we can fsync before
-    // rename — rename is atomic, but only durable if the bytes are
-    // already on disk.
     const handle = await open(this.tmpPath, "w", 0o644)
     try {
       await handle.writeFile(json, "utf8")
-      // sync the file's data to disk before we swing the inode pointer.
-      // If a crash happens between writeFile and fsync, the rename
-      // could expose an empty/partial file.
       await handle.sync()
     } finally {
       await handle.close()
