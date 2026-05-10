@@ -1,211 +1,127 @@
-# Handoff — kobe (Wave 3 → Wave 4)
+# Handoff — kobe (post-0.2.x polish wave)
 
-> Written 2026-05-09 at the end of a long Wave 3 session. Context was about to overflow; Jackson is opening a fresh window inside this directory and wants you to pick up here.
+> Written 2026-05-10 at the end of a long polish session that shipped 0.2.0 → 0.2.1 → 0.2.2.
+> Prior handoffs:
+>   - [`docs/HANDOFF-v1.md`](./docs/HANDOFF-v1.md) — Phase 0 mission + framing.
+>   - [`docs/HANDOFF-v2.md`](./docs/HANDOFF-v2.md) — Wave 3 → 4 transition (5-pane TUI shipped).
 >
-> The original Phase-0 briefing is now at [`docs/HANDOFF-v1.md`](./docs/HANDOFF-v1.md). Read it for the project's mission and the Phase 0 → 1 framing. THIS file is what just shipped + what's next.
+> THIS file: where the binary stands at v0.2.2, the research that drove the recent decisions, and what's open.
 
 ---
 
 ## Read first (in this order)
 
-1. **`CLAUDE.md`** — operating model, hard rules, pane focus + flex-first layout conventions, agent-team / context discipline, "no delete without consent."
-2. **`docs/DESIGN.md`** — design philosophy. Especially §1 (Conductor screenshot grammar — partly obsolete now, see §"Direction shift" below), §2.5 + §2.5.1 (state ownership; the §2.5.1 note about "no re-read on done" is now obsolete after the chat refactor — see §"Recent decisions"), §5 (architecture), §10 (data model).
-3. **`docs/PLAN.md`** — Phase 0 → 1 stream/wave plan. Waves 0/1/2/3 are done; Wave 4 polish is partly in flight. See gates G0–G3.
-4. **`docs/HARNESS.md`** — agent self-test contract (still load-bearing).
-5. **`memory/MEMORY.md` index** — important learnings:
-   - `feedback_agent_worktree_isolation.md` — agents bypass `isolation: "worktree"` via absolute paths unless brief explicitly forbids it.
-   - `feedback_layout_flex_first.md` — flex over hardcoded widths; document hardcodes when unavoidable.
+1. **`CLAUDE.md`** — operating model, hard rules. Especially the "no delete without consent" rule.
+2. **`docs/DESIGN.md`** — design philosophy + state-ownership conventions.
+3. **`docs/PLAN.md`** — Phase 0 → 1 wave plan. Phase 1 closed at G4 (shipped as `@sma1lboy/kobe@0.1.0`); v0.2.x is post-G4 polish.
+4. **`docs/KEYBINDINGS.md`** — pane-scope rules + chord-decision log. Read **before** adding/moving any chord. The Decision log section in particular records why we rejected ctrl+digit / alt+digit / ctrl+shift+digit.
+5. **`docs/HARNESS.md`** — agent self-test contract.
+6. **`memory/MEMORY.md`** — load-bearing per-session learnings.
 
 ---
 
-## Where we are (state of the binary)
-
-**Wave 3 is shipped.** `bun run dev` boots a 5-pane TUI:
+## State of the binary at v0.2.2
 
 ```
-┌────────────────────────────────────────────────────────────────────┐
-│ kobe — <active task title>                                         │  TopBar
-├──────────┬─────────────────────────────────┬───────────────────────┤
-│ Sidebar  │ WORKSPACE                       │ FILES                 │
-│ kobe     │  [chat] [<file>] [<file>] …     │  All Changes Checks   │
-│          │  ┌────────────────────────────┐ │  .gitignore           │
-│ ● task-1 │  │ chat OR file/diff preview  │ │  CLAUDE.md            │
-│ ○ task-2 │  │  (active tab determines)   │ │  docs/                │
-│          │  │ messages: user/assistant/  │ │  src/                 │
-│          │  │  tool/system rows          │ ├───━━━━━━━━━━━━━━━━━━━┤
-│          │  │                            │ │ TERMINAL              │
-│          │  │ > Ask Claude…              │ │  per-task tmux pty    │
-│ + Add    │  └────────────────────────────┘ │                       │
-├──────────┴─────────────────────────────────┴───────────────────────┤
-│ Tasks: [j/k] nav [enter] select [d] delete  …  [tab] cycle [ctrl+1234] focus [ctrl+n] new [?] help [q] quit │
-└────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│ KobeCode v0.2.2                                  [PR] Create PR      │  TopBar
+├──────────┬─────────────────────────────────┬─────────────────────────┤
+│ h TASKS  │ j WORKSPACE        kobe/branch  │ k FILES                 │
+│          │ ┌──[chat]─[<file>]──[<file>]─┐ │   All  Changes  Checks  │
+│ [Working │ │                            │ │   .github/              │
+│  session]│ │  user/assistant/tool rows  │ │   docs/                 │
+│ Archives │ │  + queued prompt rows      │ │   packages/             │
+│          │ │  + thinking spinner        │ │   src/                  │
+│ ● task-1 │ │                            │ ├─━━━━━━━━━━━━━━━━━━━━━━━┤
+│ ○ task-2 │ │  > Ask Claude…             │ │ l TERMINAL              │
+│          │ │  ┃  enter queue            │ │  per-task tmux pty      │
+│          │ │  ┃  ctrl+enter steer       │ │                         │
+│          │ └────────────────────────────┘ │                         │
+├──────────┴─────────────────────────────────┴─────────────────────────┤
+│ Chat: [ctrl+q] tasks [enter] send [shift+enter] newline …            │  StatusBar
+│       … [F1] help [tab] cycle [ctrl+hjkl] focus                      │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
-### Stack (locked, do not re-litigate)
+Pane focus uses **`ctrl+hjkl`** (h=tasks, j=workspace, k=files, l=terminal). The bold ordinal letter on each pane title shows the chord.
 
-- **TypeScript + `@opentui/core@0.2.4` + `@opentui/solid@0.2.4` + `solid-js@1.9.10` + Bun**.
-- Tests: vitest (`bun run test`), behavior tests via PTY driver under `node-pty`.
-- Linter: biome 1.9.4. `bun run lint`.
+The five major user-visible additions since v0.1.x:
 
-### Tech surfaces
+1. **Mid-stream queue + steer** — typing while a turn streams. Plain enter queues; ctrl+enter interrupts the in-flight subprocess and dispatches the new prompt against the same session id. Drain serialises through a `draining` lock; orchestrator buffers `done`/`error` until engine cleanup completes so `SessionRegistry: duplicate sessionId` and `tasks.json.tmp` rename races can't fire on consecutive turns.
+2. **Pending approval/question pickers lifted into the composer slot** — ExitPlanMode and AskUserQuestion render as the bottom-of-chat input while pending; once submitted, the row drops back into the transcript as a resolved entry.
+3. **Settings dialog two-level keyboard nav** — sidebar level (j/k cycles General/Dev) vs body level (j/k cycles theme rows + transparent-bg toggle + Dev's Reset button), h/l switch level. Every body row reachable from the keyboard.
+4. **User-installable themes** under `~/.kobe/themes/` + user-pickable focus-accent color slot.
+5. **Permission cycler reaches `bypassPermissions`** — `default → acceptEdits → plan → bypass → default`. Lets the user opt into "auto-approve everything" for tasks where the worktree-cwd boundary is too restrictive.
 
-- **Engine**: `src/engine/claude-code-local/` — subprocess wrapper around `claude` CLI. Spawn / resume via `--resume <id> --output-format stream-json`. Stream-json parser normalizes events to a discriminated union (`assistant.delta` / `tool.start` / `tool.result` / `usage` / `done` / `error`).
-- **Orchestrator**: `src/orchestrator/core.ts` — `class Orchestrator`. Methods: `createTask`, `runTask`, `pauseTask`, `archiveTask`, `deleteTask`. Wraps `TaskIndexStore` (`~/.kobe/tasks.json`, atomic writes + lockfile) and `GitWorktreeManager`.
-- **TUI**: `src/tui/` — Solid components on opentui, lifted skeleton from `refs/opencode`.
-  - `app.tsx` — Shell, FocusContext provider, NewTaskDialog, StatusBar, layout.
-  - `panes/sidebar/` — task list (Stream F).
-  - `panes/chat/` — chat (just refactored to single `messages[]` model).
-  - `panes/filetree/` — Stream H.
-  - `panes/preview/` — Stream I (multi-file tabs, File / Diff modes).
-  - `panes/terminal/` — Stream J (tmux backend; `node-pty` doesn't work under Bun for this).
-  - `context/focus.tsx` — FocusContext (`useFocus().focused / setFocused / is(pane) / cycle`).
-  - `context/keybindings.ts` — global keymap, `inputFocused` opt to gate single-letter shortcuts.
-  - `lib/keymap.tsx` — `useBindings` thin wrapper. Modifier-aware (`{key:"k"}` does NOT match `ctrl+k`).
-- **Behavior tests**: `test/behavior/` — PTY-driven, fake-engine HTTP side-channel on `KOBE_TEST_FAKE_PORT`.
+All four pane titles align (paddingTop=1, paddingLeft=2). Modals cap at viewport height with internal scroll for long content; the `▌` focus marker was dropped (the bold focus-accent ordinal does that job).
 
 ---
 
-## What just shipped (last ~5 hours of work)
+## Research findings that drove recent decisions
 
-In rough chronological order, all on `main`:
+When I had to make a judgment call I delegated research to subagents. The decisions land in code; the *why* behind each lands here.
 
-1. **Wave 3 G+H+I+J** — chat / filetree / preview / terminal panes. 5-pane layout integrated.
-2. **Tabbed center column** — chat tab + per-file tabs, per-task tab state.
-3. **Visual polish — agent-deck style** — borders, CAPS pane headers, `[key]` chip hotkeys, transparent backgrounds, tokyonight default.
-4. **FocusContext** — `useFocus()` exposes `focused / setFocused / is(pane) / cycle`. ctrl+1/2/3/4 jump, tab cycle, click-to-focus, green border on focused pane.
-5. **Composer key gating** — when workspace pane is focused, single-letter shortcuts (`?`, `n`, `q`, `tab`) are NOT registered so the chat input can receive them as typed text. Modifier-prefixed (`ctrl+...`) always work.
-6. **Pane bindings gated on dialog state** — `isFocused(pane)` in app.tsx returns false whenever a dialog is open. Stops sidebar's `d` (delete-task) from firing on every `d` typed into a path field.
-7. **Delete task + base-ref picker** — sidebar `d` opens confirm; new-task dialog has 3 fields with a branch picker (up/down navigates `git for-each-ref`, prefills the input, enter commits).
-8. **Engine session registry leak fix** — pump's finally block now `unregister()`s the session id, so the next `resume(sessionId,...)` doesn't blow up with `duplicate sessionId`.
-9. **Chat state refactor (← BIG ONE)** — was `past + live + draftUser` tri-state which lost user-prompt history (each new submit overwrote `draftUser`). Now a single chronological `messages: ChatRow[]` per opcode's design. user submits append, assistant deltas append/coalesce, tool starts/results pair by name. 20 unit tests in `test/tui/chat.test.tsx` cover all invariants including multi-turn integration.
+### 1. Pane focus chord — why `ctrl+hjkl` over `ctrl+1..4` / `alt+1..4`
 
-### Known failing tests (as of last run, 2 of 33 behavior tests)
+Iterated through three candidates. Full decision log in [`docs/KEYBINDINGS.md`](./docs/KEYBINDINGS.md) "Decision log: pane focus chord."
 
-- `test/behavior/sidebar-delete.test.ts > pressing 'd' on the sidebar cursor + confirm deletes …` — the test creates a task, waits for the title in the sidebar. Possibly affected by the chat refactor or dialog-gate change. **Has not been re-investigated post-refactor; investigate first.**
-- One other behavior test was failing per the last `bun run test:behavior` count (`2 failed | 31 passed`). Identify which by running and re-investigate.
+- **`ctrl+1..4`** — VSCode/iTerm muscle memory. Killed by terminal-layer reality: legacy mode doesn't propagate the ctrl modifier on digit keys (the byte the app receives is just `1`). Fixing that needs CSI-u / kitty keyboard support, AND tmux extended-keys, AND iTerm2 has a known quirk where ctrl+1 / ctrl+9 / ctrl+0 silently fall through to bare digit bytes even with CSI-u enabled (only ctrl+2..8 emit the proper sequence).
+- **`alt+1..4`** — alt+digit produces a stable two-byte ESC-sequence in legacy mode, so it works regardless of CSI-u. Killed because macOS launchers (Raycast, Karabiner, Alfred) commonly intercept Option+digit globally before the byte reaches the terminal.
+- **`ctrl+hjkl`** — final pick. ctrl+letter chords map to stable C0 control bytes (ctrl+h=BS, ctrl+j=LF, ctrl+k=VT, ctrl+l=FF), every terminal sends them without protocol negotiation. Conflict with editor commands (ctrl+h=backspace etc.) is OK because pressing the chord moves focus AWAY from the input that would consume it — by the time the byte reaches the textarea, focus has already left. Required moving `palette.open` from `ctrl+k` to `ctrl+p` / `cmd+p`.
 
-`bun run test` (unit) is green: 20/20 chat store tests pass, all other unit tests too.
+**Lesson recorded in `feedback_keybinding_boundaries.md` memory**: prefer ctrl+letter over ctrl+digit / alt+digit / cmd+digit. Letters Just Work; digits need protocol upgrades; non-ctrl modifiers get hijacked by user-space launchers.
 
----
+### 2. Default model resolution — what claude-code does, what opcode does, what kobe does
 
-## Direction shift — Jackson's new product priorities
+Researched both refs to figure out where the default model comes from.
 
-This is what Jackson said in the very last message before context ran out. Treat as the PRD update.
+- **claude-code** (`refs/claude-code/src/utils/model/model.ts:getUserSpecifiedModelSetting()`): resolution order is `/model` runtime override → `--model` CLI flag → `ANTHROPIC_MODEL` env var → `~/.claude/settings.json`'s top-level `model` key. The `[1m]` suffix syntax (`claude-opus-4-7[1m]`) is part of the model id, parsed by `parseUserSpecifiedModel()` to extract the 1M-context flag.
+- **opcode** (`refs/opcode/src-tauri/src/commands/claude.rs:757-768`): does NOT read settings. The frontend passes `model: String` explicitly to the Tauri command on every spawn. No `~/.claude/settings.json` integration.
+- **kobe (current)**: `Task.model` (per-task pin) → `~/.claude/settings.json`'s `model` key → hardcoded `FALLBACK_DEFAULT_MODEL_ID = "claude-opus-4-7[1m]"`. Mirrors claude-code's ordering. Reader at [`packages/kobe/src/tui/panes/chat/composer/claude-settings.ts`](./packages/kobe/src/tui/panes/chat/composer/claude-settings.ts). Orchestrator forwards the resolved id via `--model` on every spawn.
 
-### 1. Drop the 5 sidebar status groups (for now)
+Picker entries also added: `opus 4.7 (1M)`, `sonnet 4.6 (1M)`. Same `[1m]` suffix syntax as claude-code.
 
-Currently: `In progress / In review / Backlog / Done / Canceled / Error`. This was modeled after Conductor's "is this PR merged" workflow — kobe doesn't manage that. Simplify the sidebar grouping.
+### 3. Permission gating in `claude -p` mode — opcode's answer is "skip"
 
-Status management (the whole `done → in_review → done → archived` flow) is **deferred to an experimental feature**, not Wave 4.
+When a tool hits a permission gate (e.g. reading `~/.zshrc` from a worktree cwd), claude-code in `-p` mode has no interactive permission protocol — there is no popup, no approval event in stream-json, no built-in approve/deny UI. The pragmatic answers are:
 
-### 2. Multi-repo sidebar
+- **opcode**: spawns with `--dangerously-skip-permissions` universally. Every gate is bypassed, model sees no denials. Verified: `refs/opcode/src-tauri/src/commands/claude.rs:757-768` and `web_server.rs:486-495` both add the flag unconditionally. opcode's "permission" UI you might find by grepping is for swarm leader/worker coordination — unrelated to subprocess gates.
+- **kobe (current, v0.2.2)**: Exposes `bypassPermissions` as a 4th step in the shift+tab cycler (`default → acceptEdits → plan → bypass → default`). User opt-in per task, with the footer badge rendering "bypass permissions" in warning red so the loose-permissions state is visible.
+- **The proper alternative** (not built): `--permission-prompt-tool <name>` lets claude-code delegate every tool-permission decision to a custom MCP tool. Wiring that up requires (a) a kobe-hosted MCP server implementing the permission tool, (b) registering it on every spawn, (c) routing async permission requests to a UI panel and waiting for approve/deny. ~2-3 day build. Tracked as a follow-up; not in v0.2.x scope.
 
-Today, each task carries its own `repo` field. The sidebar groups by status, not by repo. Jackson wants the sidebar to be **repo-grouped** with sessions under each repo — top-level rows are repos, nested rows are sessions belonging to that repo.
+### 4. Mid-stream submission modes — the queue/steer feature
 
-Likely shape:
-```
-my-frontend (3)
-  ● fix login redirect bug
-  ○ refactor auth service
-  ○ add password reset
-
-api-server (1)
-  ● migrate to fastify
-
-+ Add repo
-```
-
-### 3. Each session = one worktree, can have multiple chat tabs + file view
-
-Today: a "task" = a session = a worktree = ONE chat. Jackson wants ONE session (worktree) to host **multiple chat tabs** (different conversations against the same codebase) plus **file view tabs** (current center-column behavior). The center column already has multi-tab support — just need the data model to allow more than one chat per session.
-
-Implication: `Task.sessionId: string | null` → `Task.sessionIds: string[]`. Or introduce a separate `Conversation` entity per task. This is a real schema change.
-
-### 4. Auto-update mechanism
-
-Jackson wants kobe to push to a specific repo, and on every launch check that repo for updates. Likely a small "newer version available" banner. **Out of scope for the current session — note for Wave 4.**
-
-### 5. Status management → experimental feature
-
-Don't remove the existing status state machine — it works and tests cover it. But UI should hide the 5-group sidebar and the related transitions (`d` key for delete still useful). Make status management an opt-in experimental flag (`KOBE_STATUS_FEATURE=1` or similar). Defer the actual experimental wiring; just simplify the default sidebar.
+claude-code's own UI implements this via a unified `commandQueue` with three priorities (`'now' / 'next' / 'later'`) — see `refs/claude-code/src/utils/messageQueueManager.ts`. kobe collapsed `'next'` into `'later'` because `claude -p` is a one-shot subprocess with no mid-tool insertion point: queueing past the in-flight turn is the only meaningful "later" semantics. `'now'` maps to kobe's `ctrl+enter` steer (kill subprocess + run new prompt against same session id); `'later'` maps to plain `enter` queue (drained on `done`).
 
 ---
 
-## Suggested next steps for the new session
+## Open follow-ups (in rough priority order)
 
-In priority order:
-
-1. **Investigate + fix the 2 failing behavior tests** (sidebar-delete and one other). Run `bun run test:behavior 2>&1 | grep FAIL` to identify. Likely the chat refactor changed enough render output to break a substring assertion. Fix is probably small.
-
-2. **Sidebar simplification** (#1 + #2 above): strip the 5 status groups, replace with repo-grouped sessions. Each repo row has a count, expand/collapse semantics, `+ Add repo` at the bottom. The `Task` type already has `repo`; just group by it. Conditional re-introduce statuses behind the experimental flag later.
-
-3. **Multi-chat-per-session** (#3): bigger schema change. Probably:
-   - Add `Conversation = { id; sessionId: string | null; title: string; createdAt; updatedAt }`
-   - `Task` retains worktree + branch info, gets `conversations: Conversation[]`
-   - Center tab strip shows `[chat: <conv1>] [chat: <conv2>] [<file>] [<file>]`
-   - Default: one chat per session; user can `cmd+t` (or similar) to open a new chat tab against the same worktree
-   - Each chat tab subscribes to its own sessionId
-
-4. **Auto-update** (#4): defer until 2 + 3 are stable. Simplest approach: ship `kobe --check-updates` that compares `package.json` version against a release manifest URL, prints a one-line banner if newer.
-
-5. **Match Claude Code's chat render exactly** — the message refactor fixed the *shape* (single chronological array) but the *visual rendering* of each row is still kobe's homegrown styling. Mirror Claude Code's own conventions:
-   - Open `refs/claude-code/src/ink/components/` (the leaked Anthropic source has the canonical Ink-based renderers).
-   - Match their assistant text formatting (markdown? code blocks? citations?), tool call display (collapsed banner shape, the indent + line widths, the result preview format), thinking-dots animation, error formatting.
-   - kobe should feel like Claude Code, not "a third-party shell wrapping Claude Code." When Jackson types in kobe and gets a reply, it should be visually indistinguishable (modulo the fact that we're embedded in a 5-pane layout, not full-screen).
-   - Files to update: `src/tui/panes/chat/Chat.tsx` (`MessageRow`, `Loading`), `src/tui/panes/chat/store.ts` (might need to add fields like `isThinking`, `usage` row, `code-block` detection).
-
-6. **Optimize the chat composer (input field)** — current implementation is opentui's bare `<input>` with single-line text + enter-to-submit. Limitations:
-   - Single line only — no multi-line composition (newlines via shift+enter, paste with newlines, etc.).
-   - No history navigation (up/down to recall prior prompts in the session).
-   - No partial submit / draft persistence across task switches.
-   - No paste handling (large pastes flicker; binary/image paste is undefined).
-   - No syntax-aware features (mention completion, command palette inside input).
-
-   First check if a ref has prior art:
-   - `refs/claude-code/src/ink/components/` — Claude Code's own input. Highly likely has multi-line, history, paste handling. Port the patterns.
-   - `refs/agent-deck` — different domain (it's a session manager, not an editor) but might have a polished input.
-   - `refs/opcode` — desktop app, less applicable.
-
-   If no ref fits, build incrementally: multi-line first, then history, then paste, then mention completion. Keep the composer in `src/tui/panes/chat/Chat.tsx` until it gets large enough to warrant its own file.
-
-7. **Document the chat refactor** in `docs/DESIGN.md` §2.5.1 — the previous note saying "no re-read on done" is now correct again (single messages array doesn't need it), but it should also say "do not split state into past/live/draftUser; opcode keeps one array, we follow." Update the §2.5.1 to reflect the rewrite.
-
-8. **Long-term: rename `kobe`** — still a city codename. When the product gets a real name, rename the repo + binary + docs.
+1. **Permission-prompt MCP bridge.** v0.2.2 settled for opcode-style `bypassPermissions`. Real fix is the MCP-server route described above. Tracked separately. ~2-3 day estimate.
+2. **Behavior tests are local-only.** They need tmux + node-pty terminal sizing that CI can't easily provide. CI runs typecheck + unit + build only. Some tests on this machine fail due to local environment quirks (terminal resize timing, tmux extended-keys in test environment). Re-running on Jackson's machine generally passes.
+3. **`extended-keys` requirement** for users who DO want ctrl+digit / CSI-u sequences (the few legitimate ctrl+digit chords in the keymap). `~/.tmux.conf` needs `set -g extended-keys on` + `set -as terminal-features 'xterm*:extkeys'`, AND iTerm2 needs profile-level "Report keys using CSI u." iTerm2's ctrl+1 quirk persists even with that. Documented in `docs/KEYBINDINGS.md`.
+4. **kobe currently re-reads `~/.claude/settings.json` lazily** with a process-lifetime cache. claude-code's own `/model` command rewrites the file mid-session — kobe doesn't pick that up live. Cache invalidation is a follow-up; for now the user restarts kobe to pick up the new default.
+5. **Bold leading number on chat tab chips** was removed when chat tab navigation moved from `ctrl+1..9` numeric pick to `ctrl+]` / `ctrl+[` cycle. If the user later wants positional chat-tab chord back (e.g. `alt+1..9` or some bracket-prefixed chord), the chip rendering can re-add an ordinal.
 
 ---
 
-## Useful pointers
+## Operating discipline — what the next session should preserve
 
-- **Run dev**: `bun run dev` (preloads `@opentui/solid/preload`).
-- **Run all tests**: `bun run test` (unit + type tests, vitest), `bun run test:behavior` (PTY-driven).
-- **Lint**: `bun run lint` (biome). Auto-fix: `bun x @biomejs/biome check --write <file>`.
-- **Smoke**: `timeout 5 bun run dev > /tmp/smoke.log 2>&1` then grep for expected text.
-- **Fake engine for tests**: set `KOBE_TEST_ENGINE=fake` and `KOBE_TEST_FAKE_PORT=<port>`. Test scripts the engine via `POST localhost:<port>/script` with `{sessionId, events}`. See `test/behavior/fake-engine.ts` + `src/tui/app.tsx` `mountFakeEngineServer`.
-- **Tasks live at**: `~/.kobe/tasks.json`.
-- **Worktrees live at**: `<repo>/.kobe/worktrees/<task-id>/`.
-- **Claude Code session JSONL at**: `~/.claude/projects/<encoded-cwd>/<session-uuid>.jsonl` (read via `engine.readHistory(sessionId)`).
+- **Every keybinding decision goes through `docs/KEYBINDINGS.md`.** Add an overlap-table row when you discover a new conflict, append to the Decision log when a chord moves. The doc is small on purpose — if a section sprawls, the underlying design is probably wrong.
+- **`KobeKeymap` in `packages/kobe/src/tui/context/keybindings.ts` is the single source of truth.** No chord strings outside that table; pane code uses `bindByIds({ id: handler })`.
+- **CHANGELOG entries are user-facing.** Past sessions sometimes cataloged 30 atomic commits as 4 user-visible bullets — that's the right altitude. Use `[Unreleased]` while in flight, rename to `[X.Y.Z] - YYYY-MM-DD` when cutting.
+- **Behavior tests are local-only**, not gating CI. Don't block on them; run them when you have a real environment, surface flaky ones to Jackson.
+- **The `refs/` slot is read-only.** opcode + claude-code are research material. When you don't know how a subprocess pattern should look, port from `refs/opcode/`. When you don't know how a chat row should look, port from `refs/claude-code/`. Don't reinvent.
+- **No delete without explicit user consent in the same conversation turn.** This bit a previous session — accidentally `git add -A` swept up 503 unrelated deletions. The recovery commit is in the log.
 
 ---
 
-## Hard rules to remember (from CLAUDE.md)
+## Releases shipped this session
 
-- **NEVER** include `Co-Authored-By: Claude` or any AI/Anthropic attribution in commits.
-- **NEVER** delete files unless Jackson explicitly says "delete" or "remove" in that conversation.
-- **NEVER** use `--no-verify`, `-c commit.gpgsign=false`, or any git override.
-- **Agents in worktree isolation**: brief MUST forbid absolute paths into the main repo or they'll silently escape (caused merge chaos this session — twice).
-- **Layout: flex-first**. `width={N}` only with documented rationale (sidebar's 42, terminal-grammar fixed glyphs, modal centering).
-- **State: delegate to Claude Code where possible**. The chat now follows opcode's single-array pattern — append, don't reload.
+| Version | Date       | Notes                                                                      |
+| ------- | ---------- | -------------------------------------------------------------------------- |
+| 0.2.0   | 2026-05-10 | Queue/steer, modal viewport caps, picker-first new-task, two-level settings, user-installable themes, focus-accent setting, ctrl+hjkl pane focus. |
+| 0.2.1   | 2026-05-10 | Default model from `~/.claude/settings.json`, opus 4.7 (1M) added, unified focus-blur on pane jump. |
+| 0.2.2   | 2026-05-10 | `bypassPermissions` reachable via shift+tab cycler.                        |
 
----
-
-## Open questions for the new session
-
-1. Do we keep the existing `TaskStatus` union (`backlog | in_progress | in_review | done | canceled | error`) on disk even though the sidebar no longer renders by status? Probably yes — the status drives concurrency cap (max 4 in_progress) and would be needed if status feature comes back.
-2. For multi-chat-per-session, does each chat have its own Claude Code session id, or do they all share the worktree's session id? (If they share, message ordering across chats becomes ambiguous; opcode-style separate session per chat is cleaner.)
-3. Default sidebar grouping when there's only ONE repo — collapse the repo header? Or always show the level?
-
-Pick these up with Jackson before implementing.
-
----
-
-Good luck. The codebase is in good shape — visual polish is solid, behavior tests cover the load-bearing flows, the chat refactor closed the most painful design wart. The next session is mostly about the new sidebar shape + multi-chat support.
+All three published to npm + tagged on GitHub via the release workflow. CHANGELOG entries at `packages/kobe/CHANGELOG.md` are the authoritative descriptions.
