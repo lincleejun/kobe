@@ -38,10 +38,17 @@ export function Dialog(
   const renderer = useRenderer()
 
   let dismiss = false
+  // Default-medium = 80 cols (was 60). At 60 the F1 help dialog and
+  // settings dialogs felt cramped on wide terminals — descriptions
+  // wrapped early and the right-side hint columns ran out of room.
+  // 80 leaves comfortable headroom on a typical 100+-col terminal
+  // while still capping at `dimensions().width - 2` (see maxWidth
+  // below) for narrow PTY sizes. large + xlarge get proportional
+  // bumps so the relative scale stays the same.
   const width = () => {
-    if (props.size === "xlarge") return 116
-    if (props.size === "large") return 88
-    return 60
+    if (props.size === "xlarge") return 140
+    if (props.size === "large") return 110
+    return 80
   }
 
   // Vertical headroom around the card so it never lands flush against
