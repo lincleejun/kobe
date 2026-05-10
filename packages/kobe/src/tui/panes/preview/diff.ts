@@ -36,6 +36,33 @@ import { spawnSync } from "node:child_process"
  */
 const MAX_BYTES = 2 * 1024 * 1024
 
+/**
+ * Resolve `cwd` to the git toplevel that owns it, falling back to `cwd`
+ * itself if it isn't inside a git repo.
+ *
+ * Why: FileTree's `git ls-files --full-name` and `git status --porcelain`
+ * emit paths relative to the **repo toplevel**, not the cwd. For
+ * worktree tasks that's the same path (`git worktree add` makes the
+ * worktree its own toplevel) so no fix-up is needed. But for "main"
+ * tasks (KOB-15) pointing at a *subdirectory* of a monorepo, cwd is
+ * `packages/kobe` while the toplevel is `/Users/.../kobe`. If `cat` /
+ * `git diff` use the subdir as cwd, `.agents/skills/linear/SKILL.md`
+ * (a toplevel-relative path emitted by FileTree) resolves to
+ * `packages/kobe/.agents/...` and ENOENTs — surfaces in the UI as
+ * "file not found (rebased away?)". Resolving to the toplevel here
+ * keeps FileTree and Preview using the same path frame.
+ */
+function resolveGitToplevel(cwd: string): string {
+  const r = spawnSync("git", ["rev-parse", "--show-toplevel"], {
+    cwd,
+    encoding: "utf8",
+    shell: false,
+  })
+  if (r.status !== 0) return cwd
+  const top = (r.stdout ?? "").trim()
+  return top || cwd
+}
+
 /** Banner appended when output exceeds {@link MAX_BYTES}. */
 const TRUNCATED_BANNER = "\n... [truncated by kobe — file exceeds 2 MiB] ..."
 
@@ -64,7 +91,7 @@ export async function readFile(worktreePath: string, relPath: string): Promise<R
     return { ok: false, error: "path escapes worktree" }
   }
   const proc = spawnSync("cat", ["--", relPath], {
-    cwd: worktreePath,
+    cwd: resolveGitToplevel(worktreePath),
     encoding: "utf8",
     shell: false,
     maxBuffer: MAX_BYTES + 4096,
@@ -100,7 +127,7 @@ export async function readDiff(worktreePath: string, base: string, relPath: stri
     return { ok: false, error: "path escapes worktree" }
   }
   const proc = spawnSync("git", ["diff", "--no-color", base, "--", relPath], {
-    cwd: worktreePath,
+    cwd: resolveGitToplevel(worktreePath),
     encoding: "utf8",
     shell: false,
     maxBuffer: MAX_BYTES + 4096,
@@ -130,7 +157,7 @@ export async function readDiff(worktreePath: string, base: string, relPath: stri
 export async function isPathChanged(worktreePath: string, relPath: string): Promise<boolean> {
   if (!worktreePath || !relPath) return false
   const proc = spawnSync("git", ["status", "--porcelain", "--", relPath], {
-    cwd: worktreePath,
+    cwd: resolveGitToplevel(worktreePath),
     encoding: "utf8",
     shell: false,
     maxBuffer: 64 * 1024,
