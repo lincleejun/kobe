@@ -47,6 +47,8 @@
 import { TextAttributes } from "@opentui/core"
 import { For, Show, createSignal } from "solid-js"
 import { useTheme } from "../../context/theme"
+import { Loading } from "./Loading"
+import { Markdown } from "./Markdown"
 import {
   COMMAND_ARGS_TAG,
   COMMAND_NAME_TAG,
@@ -54,8 +56,13 @@ import {
   LOCAL_COMMAND_STDOUT_TAG,
   extractTag,
 } from "./composer/xml-tags"
-import { Loading } from "./Loading"
-import { Markdown } from "./Markdown"
+import {
+  COLLAPSED_LINE_CAP,
+  type FormattedDiff,
+  capLines,
+  formatEditDiff,
+  formatWriteDiff,
+} from "./edit-diff"
 import type { ChatRow } from "./store"
 
 /**
@@ -323,9 +330,22 @@ function ToolRow(props: {
   const r = () => props.row
   const prefixGlyph = () => (r().done ? BLACK_CIRCLE : "✻")
   const prefixColor = () => (r().done ? theme.success : theme.warning)
+  // Edit/Write get a custom inline-diff renderer (lifted from
+  // refs/claude-code/src/components/FileEditToolUpdatedMessage.tsx).
+  // For these, the chip-style `(arg-preview)` would be a jumbled
+  // JSON blob and the `⎿ File created…` result line is redundant
+  // noise — the diff IS the preview.
+  const isDiffTool = () => r().name === "Edit" || r().name === "Write"
+  const diff = (): FormattedDiff | null => {
+    if (r().name === "Edit") return formatEditDiff(r().input)
+    if (r().name === "Write") return formatWriteDiff(r().input)
+    return null
+  }
   return (
     <box paddingTop={1} flexDirection="column">
-      {/* Banner: prefix + tool name + (one-line args). */}
+      {/* Banner: prefix + tool name + (one-line args). For Edit/Write
+          the args turn into the diff header below, so we suppress the
+          parenthesised JSON-ish blob to keep the banner clean. */}
       <box flexDirection="row" gap={1} onMouseUp={() => props.onToggle()}>
         <text fg={prefixColor()} attributes={TextAttributes.BOLD}>
           {prefixGlyph()}
@@ -333,12 +353,23 @@ function ToolRow(props: {
         <box flexGrow={1}>
           <text fg={theme.text}>
             <span style={{ attributes: TextAttributes.BOLD }}>{r().name}</span>
-            <span style={{ fg: theme.textMuted }}>({previewToolInput(r().input)})</span>
+            <Show when={!isDiffTool()}>
+              <span style={{ fg: theme.textMuted }}>({previewToolInput(r().input)})</span>
+            </Show>
           </text>
         </box>
       </box>
-      {/* Result preview — collapsed view shows one indented line. */}
-      <Show when={!props.expanded && r().done && r().output !== undefined}>
+      {/* Edit/Write inline diff — header + colored line list. Renders
+          in both collapsed and expanded states; only the per-side line
+          cap differs. */}
+      <Show when={isDiffTool() && diff()}>
+        <EditWriteDiffBlock diff={diff() as FormattedDiff} expanded={props.expanded} onToggle={props.onToggle} />
+      </Show>
+      {/* Result preview — collapsed view shows one indented line.
+          Suppressed for Edit/Write (the diff already serves as the
+          preview; the engine result string is usually
+          "File created at ..." or similar). */}
+      <Show when={!isDiffTool() && !props.expanded && r().done && r().output !== undefined}>
         <box paddingLeft={2} flexDirection="row" onMouseUp={() => props.onToggle()}>
           <text fg={theme.textMuted}>
             {RESULT_PREFIX}
@@ -346,8 +377,10 @@ function ToolRow(props: {
           </text>
         </box>
       </Show>
-      {/* Expanded view — full input + output. */}
-      <Show when={props.expanded}>
+      {/* Expanded view — full input + output. Skipped for Edit/Write
+          (the diff above already shows the full input; the output is
+          a redundant confirmation string). */}
+      <Show when={!isDiffTool() && props.expanded}>
         <box paddingLeft={2} flexDirection="column" paddingTop={0}>
           <text fg={theme.textMuted}>input:</text>
           <text fg={theme.text}>{safeStringify(r().input)}</text>
@@ -356,6 +389,65 @@ function ToolRow(props: {
             <text fg={theme.text}>{safeStringify(r().output)}</text>
           </Show>
         </box>
+      </Show>
+    </box>
+  )
+}
+
+/**
+ * Inline diff body for Edit/Write tool rows. Lifted (visual structure
+ * only) from `refs/claude-code/src/components/FileEditToolUpdatedMessage.tsx`:
+ * a header line ("Added 3 lines, removed 1 line") followed by the diff
+ * lines in two color zones (red/diffRemoved for `-`, green/diffAdded
+ * for `+`).
+ *
+ * The collapsed render caps each side at {@link COLLAPSED_LINE_CAP}
+ * lines, appending a dim `… N more lines` row when truncated. Expanded
+ * shows the full set. Click anywhere on the block toggles.
+ *
+ * Background tint mirrors `src/tui/panes/preview/DiffLine.tsx` so the
+ * chat's inline diff visually matches the Preview pane's `/diff` view —
+ * a user moving their eye between the two surfaces sees the same
+ * vocabulary.
+ */
+function EditWriteDiffBlock(props: { diff: FormattedDiff; expanded: boolean; onToggle: () => void }) {
+  const { theme } = useTheme()
+  const cap = () => (props.expanded ? -1 : COLLAPSED_LINE_CAP)
+  const removes = () => capLines(props.diff.removes, cap())
+  const adds = () => capLines(props.diff.adds, cap())
+  return (
+    <box paddingLeft={2} flexDirection="column" onMouseUp={() => props.onToggle()}>
+      <text fg={theme.textMuted}>
+        {RESULT_PREFIX}
+        {props.diff.header}
+      </text>
+      <For each={removes().visible}>
+        {(line) => (
+          <box backgroundColor={theme.diffRemovedBg} paddingLeft={1} paddingRight={1}>
+            <text fg={theme.diffRemoved} wrapMode="none">
+              {`- ${line}` || " "}
+            </text>
+          </box>
+        )}
+      </For>
+      <Show when={removes().hidden > 0}>
+        <text fg={theme.textMuted}>
+          {`  … ${removes().hidden} more removed ${removes().hidden === 1 ? "line" : "lines"}`}
+        </text>
+      </Show>
+      <For each={adds().visible}>
+        {(line) => (
+          <box backgroundColor={theme.diffAddedBg} paddingLeft={1} paddingRight={1}>
+            <text fg={theme.diffAdded} wrapMode="none">
+              {`+ ${line}` || " "}
+            </text>
+          </box>
+        )}
+      </For>
+      <Show when={adds().hidden > 0}>
+        <text fg={theme.textMuted}>
+          {`  … ${adds().hidden} more added ${adds().hidden === 1 ? "line" : "lines"}`}
+        </text>
       </Show>
     </box>
   )

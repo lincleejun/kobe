@@ -15,6 +15,12 @@
 
 import { describe, expect, test } from "vitest"
 import {
+  COLLAPSED_LINE_CAP,
+  capLines,
+  formatEditDiff,
+  formatWriteDiff,
+} from "../../src/tui/panes/chat/edit-diff.ts"
+import {
   type ChatState,
   applyEvent,
   cleanChatText,
@@ -621,5 +627,281 @@ describe("applyEvent — user_input request/resolved (AskUserQuestion)", () => {
       FIXED_TS,
     )
     expect(s.messages[s.messages.length - 1]).toMatchObject({ kind: "question", answers: null })
+  })
+})
+
+/* ----------------------------------------------------------------- */
+/*  edit-diff helpers — inline Edit/Write diff formatting             */
+/*  (rendered by ToolRow's EditWriteDiffBlock; lifted from upstream   */
+/*  refs/claude-code/src/components/FileEditToolUpdatedMessage.tsx).  */
+/* ----------------------------------------------------------------- */
+
+describe("formatEditDiff", () => {
+  test("splits old_string and new_string into per-line removes/adds", () => {
+    const out = formatEditDiff({
+      file_path: "/abs/foo.ts",
+      old_string: "alpha\nbeta",
+      new_string: "alpha\nGAMMA\nbeta",
+    })
+    expect(out.removes).toEqual(["alpha", "beta"])
+    expect(out.adds).toEqual(["alpha", "GAMMA", "beta"])
+  })
+
+  test("header includes the file path + Added/removed line counts", () => {
+    const out = formatEditDiff({
+      file_path: "/abs/foo.ts",
+      old_string: "x",
+      new_string: "x\ny\nz",
+    })
+    expect(out.header).toContain("/abs/foo.ts")
+    expect(out.header).toContain("Added 3 lines")
+    expect(out.header).toContain("removed 1 line")
+  })
+
+  test("header pluralises 1-line edits singularly", () => {
+    const out = formatEditDiff({
+      file_path: "/abs/foo.ts",
+      old_string: "old",
+      new_string: "new",
+    })
+    // Negative lookahead, NOT [^s] — the header ends right after "1 line"
+    // and end-of-string doesn't match `[^s]`.
+    expect(out.header).toMatch(/Added 1 line(?!s)/)
+    expect(out.header).toMatch(/removed 1 line(?!s)/)
+  })
+
+  test("falls back to placeholder header when file_path missing", () => {
+    const out = formatEditDiff({ old_string: "x", new_string: "y" })
+    expect(out.header).toContain("(unknown file)")
+  })
+
+  test("CRLF newlines split correctly so Windows-saved input still diffs", () => {
+    const out = formatEditDiff({
+      file_path: "/p",
+      old_string: "a\r\nb",
+      new_string: "a\r\nB",
+    })
+    expect(out.removes).toEqual(["a", "b"])
+    expect(out.adds).toEqual(["a", "B"])
+  })
+
+  test("non-string fields collapse to empty diff (no crash)", () => {
+    const out = formatEditDiff({ file_path: 42, old_string: null, new_string: undefined })
+    expect(out.removes).toEqual([])
+    expect(out.adds).toEqual([])
+    expect(out.header).toContain("(unknown file)")
+  })
+
+  test("non-object input collapses to an empty diff", () => {
+    const out = formatEditDiff(null)
+    expect(out.removes).toEqual([])
+    expect(out.adds).toEqual([])
+  })
+})
+
+describe("formatWriteDiff", () => {
+  test("renders content as additions only (no removes)", () => {
+    const out = formatWriteDiff({
+      file_path: "/abs/new.ts",
+      content: "line one\nline two\nline three",
+    })
+    expect(out.removes).toEqual([])
+    expect(out.adds).toEqual(["line one", "line two", "line three"])
+  })
+
+  test("header reads as a Wrote-N-lines summary", () => {
+    const out = formatWriteDiff({
+      file_path: "/abs/new.ts",
+      content: "only line",
+    })
+    expect(out.header).toContain("Wrote")
+    expect(out.header).toContain("/abs/new.ts")
+    expect(out.header).toContain("Added 1 line")
+  })
+
+  test("empty content produces a 0-line diff (no add rows)", () => {
+    const out = formatWriteDiff({ file_path: "/p", content: "" })
+    expect(out.adds).toEqual([])
+    expect(out.removes).toEqual([])
+    // Header still mentions the file so the row is identifiable.
+    expect(out.header).toContain("/p")
+  })
+})
+
+describe("capLines", () => {
+  test("returns full list when under cap", () => {
+    const out = capLines(["a", "b"], 5)
+    expect(out.visible).toEqual(["a", "b"])
+    expect(out.hidden).toBe(0)
+  })
+
+  test("truncates and reports hidden count", () => {
+    const out = capLines(["1", "2", "3", "4", "5"], 2)
+    expect(out.visible).toEqual(["1", "2"])
+    expect(out.hidden).toBe(3)
+  })
+
+  test("negative cap means uncapped (used by expanded view)", () => {
+    const out = capLines(["a", "b", "c"], -1)
+    expect(out.visible).toEqual(["a", "b", "c"])
+    expect(out.hidden).toBe(0)
+  })
+
+  test("COLLAPSED_LINE_CAP is exported for the renderer", () => {
+    expect(COLLAPSED_LINE_CAP).toBeGreaterThan(0)
+    // Sanity: cap is small enough that a typical multi-hunk Edit is
+    // visibly truncated, large enough that a single-line tweak shows
+    // both sides without the "… N more lines" tail.
+    expect(COLLAPSED_LINE_CAP).toBeLessThan(50)
+  })
+
+  test("renderer collapsed-mode integration: long Edit caps + reports", () => {
+    const big = Array.from({ length: COLLAPSED_LINE_CAP + 5 }, (_, i) => `line ${i}`).join("\n")
+    const diff = formatEditDiff({
+      file_path: "/big.ts",
+      old_string: big,
+      new_string: big.replace("line 0", "LINE 0"),
+    })
+    const collapsed = capLines(diff.removes, COLLAPSED_LINE_CAP)
+    expect(collapsed.visible).toHaveLength(COLLAPSED_LINE_CAP)
+    expect(collapsed.hidden).toBe(5)
+  })
+})
+
+/* ----------------------------------------------------------------- */
+/*  edit-diff helpers — inline Edit/Write diff formatting             */
+/*  (rendered by ToolRow's EditWriteDiffBlock; lifted from upstream   */
+/*  refs/claude-code/src/components/FileEditToolUpdatedMessage.tsx).  */
+/* ----------------------------------------------------------------- */
+
+describe("formatEditDiff", () => {
+  test("splits old_string and new_string into per-line removes/adds", () => {
+    const out = formatEditDiff({
+      file_path: "/abs/foo.ts",
+      old_string: "alpha\nbeta",
+      new_string: "alpha\nGAMMA\nbeta",
+    })
+    expect(out.removes).toEqual(["alpha", "beta"])
+    expect(out.adds).toEqual(["alpha", "GAMMA", "beta"])
+  })
+
+  test("header includes the file path + Added/removed line counts", () => {
+    const out = formatEditDiff({
+      file_path: "/abs/foo.ts",
+      old_string: "x",
+      new_string: "x\ny\nz",
+    })
+    expect(out.header).toContain("/abs/foo.ts")
+    expect(out.header).toContain("Added 3 lines")
+    expect(out.header).toContain("removed 1 line")
+  })
+
+  test("header pluralises 1-line edits singularly", () => {
+    const out = formatEditDiff({
+      file_path: "/abs/foo.ts",
+      old_string: "old",
+      new_string: "new",
+    })
+    // Negative lookahead, NOT [^s] — the header ends right after "1 line"
+    // and end-of-string doesn't match `[^s]`.
+    expect(out.header).toMatch(/Added 1 line(?!s)/)
+    expect(out.header).toMatch(/removed 1 line(?!s)/)
+  })
+
+  test("falls back to placeholder header when file_path missing", () => {
+    const out = formatEditDiff({ old_string: "x", new_string: "y" })
+    expect(out.header).toContain("(unknown file)")
+  })
+
+  test("CRLF newlines split correctly so Windows-saved input still diffs", () => {
+    const out = formatEditDiff({
+      file_path: "/p",
+      old_string: "a\r\nb",
+      new_string: "a\r\nB",
+    })
+    expect(out.removes).toEqual(["a", "b"])
+    expect(out.adds).toEqual(["a", "B"])
+  })
+
+  test("non-string fields collapse to empty diff (no crash)", () => {
+    const out = formatEditDiff({ file_path: 42, old_string: null, new_string: undefined })
+    expect(out.removes).toEqual([])
+    expect(out.adds).toEqual([])
+    expect(out.header).toContain("(unknown file)")
+  })
+
+  test("non-object input collapses to an empty diff", () => {
+    const out = formatEditDiff(null)
+    expect(out.removes).toEqual([])
+    expect(out.adds).toEqual([])
+  })
+})
+
+describe("formatWriteDiff", () => {
+  test("renders content as additions only (no removes)", () => {
+    const out = formatWriteDiff({
+      file_path: "/abs/new.ts",
+      content: "line one\nline two\nline three",
+    })
+    expect(out.removes).toEqual([])
+    expect(out.adds).toEqual(["line one", "line two", "line three"])
+  })
+
+  test("header reads as a Wrote-N-lines summary", () => {
+    const out = formatWriteDiff({
+      file_path: "/abs/new.ts",
+      content: "only line",
+    })
+    expect(out.header).toContain("Wrote")
+    expect(out.header).toContain("/abs/new.ts")
+    expect(out.header).toContain("Added 1 line")
+  })
+
+  test("empty content produces a 0-line diff (no add rows)", () => {
+    const out = formatWriteDiff({ file_path: "/p", content: "" })
+    expect(out.adds).toEqual([])
+    expect(out.removes).toEqual([])
+    // Header still mentions the file so the row is identifiable.
+    expect(out.header).toContain("/p")
+  })
+})
+
+describe("capLines", () => {
+  test("returns full list when under cap", () => {
+    const out = capLines(["a", "b"], 5)
+    expect(out.visible).toEqual(["a", "b"])
+    expect(out.hidden).toBe(0)
+  })
+
+  test("truncates and reports hidden count", () => {
+    const out = capLines(["1", "2", "3", "4", "5"], 2)
+    expect(out.visible).toEqual(["1", "2"])
+    expect(out.hidden).toBe(3)
+  })
+
+  test("negative cap means uncapped (used by expanded view)", () => {
+    const out = capLines(["a", "b", "c"], -1)
+    expect(out.visible).toEqual(["a", "b", "c"])
+    expect(out.hidden).toBe(0)
+  })
+
+  test("COLLAPSED_LINE_CAP is exported for the renderer", () => {
+    expect(COLLAPSED_LINE_CAP).toBeGreaterThan(0)
+    // Sanity: cap is small enough that a typical multi-hunk Edit is
+    // visibly truncated, large enough that a single-line tweak shows
+    // both sides without the "… N more lines" tail.
+    expect(COLLAPSED_LINE_CAP).toBeLessThan(50)
+  })
+
+  test("renderer collapsed-mode integration: long Edit caps + reports", () => {
+    const big = Array.from({ length: COLLAPSED_LINE_CAP + 5 }, (_, i) => `line ${i}`).join("\n")
+    const diff = formatEditDiff({
+      file_path: "/big.ts",
+      old_string: big,
+      new_string: big.replace("line 0", "LINE 0"),
+    })
+    const collapsed = capLines(diff.removes, COLLAPSED_LINE_CAP)
+    expect(collapsed.visible).toHaveLength(COLLAPSED_LINE_CAP)
+    expect(collapsed.hidden).toBe(5)
   })
 })
