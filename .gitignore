@@ -19,3 +19,7 @@ tsconfig.vitest-temp.json
 # packages/branding outputs the rendered assets into docs/assets/brand/
 # (committed). Local-only build artefacts inside the package itself
 # (Remotion's `out/`, etc.) are ignored via packages/branding/.gitignore.
+
+# autonomous-skill per-sprint worktrees + session state
+.worktrees/
+.autonomous/
