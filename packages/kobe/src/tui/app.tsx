@@ -39,7 +39,8 @@ import { type UpdateInfo, checkLatestVersion } from "../version.ts"
 import { CenterTabStrip } from "./component/center-tab-strip"
 import { CreatePRButton } from "./component/create-pr-button"
 import { HelpDialog } from "./component/help-dialog"
-import { NewTaskDialog, stripNewlines } from "./component/new-task-dialog"
+import { NewTaskDialog } from "./component/new-task-dialog"
+import { RenameTaskDialog } from "./component/rename-task-dialog"
 import { ResizableEdge } from "./component/resizable-edge"
 import { UpdateDialog } from "./component/update-dialog"
 import { CommandPaletteProvider } from "./context/command-palette"
@@ -55,7 +56,7 @@ import { FileTree } from "./panes/filetree"
 import { Preview, type PreviewApi } from "./panes/preview"
 import { Sidebar } from "./panes/sidebar/Sidebar"
 import { Terminal } from "./panes/terminal"
-import { type DialogContext, DialogProvider, useDialog } from "./ui/dialog"
+import { DialogProvider, useDialog } from "./ui/dialog"
 import { DialogConfirm } from "./ui/dialog-confirm"
 
 const DEFAULT_THEME = "claude"
@@ -206,87 +207,9 @@ async function mountFakeEngineServer(fake: import("../../test/behavior/fake-engi
 // module for the state machine (state.ts), the JSX shell (dialog.tsx),
 // and the `NewTaskDialog.show(...)` entry point. Imported above.
 //
-// `stripNewlines` is shared from the same module because the
-// rename-task dialog below sanitizes its input the same way (opentui's
-// `<input>` quirk that inserts a literal `\n` on Enter).
-
-/* --------------------------------------------------------------------- */
-/*  Rename-task dialog                                                    */
-/* --------------------------------------------------------------------- */
-
-/**
- * Single-field rename dialog. Sidebar `r` opens this for the cursor task
- * with the current title pre-filled in the input so the user can edit
- * in place. Enter commits, esc cancels (handled by the dialog stack).
- *
- * Trim + empty-string guard: `enter` on an empty/whitespace-only value
- * is a no-op (we don't dismiss, so the user notices nothing happened
- * and can either type something or hit esc). The orchestrator's
- * setTitle defends in depth.
- */
-function RenameTaskDialog(props: {
-  currentTitle: string
-  dialogTitle?: string
-  onSubmit: (title: string) => void
-  onCancel: () => void
-}) {
-  const dialog = useDialog()
-  const { theme } = useTheme()
-  const [title, setTitle] = createSignal(props.currentTitle)
-
-  function commit() {
-    const t = title().trim()
-    if (!t) return
-    props.onSubmit(t)
-    dialog.clear()
-  }
-
-  return (
-    <box paddingLeft={2} paddingRight={2} gap={1}>
-      <box flexDirection="row" justifyContent="space-between">
-        <text attributes={TextAttributes.BOLD} fg={theme.text}>
-          {props.dialogTitle ?? "Rename task"}
-        </text>
-        <text fg={theme.textMuted} onMouseUp={() => props.onCancel()}>
-          esc
-        </text>
-      </box>
-      <box gap={0}>
-        <text fg={theme.accent}>title</text>
-        <input
-          value={title()}
-          placeholder={props.currentTitle}
-          focused={true}
-          onInput={(v: string) => setTitle(stripNewlines(v))}
-          onSubmit={() => commit()}
-        />
-      </box>
-      <box paddingBottom={1}>
-        <text fg={theme.textMuted}>enter rename · esc cancel</text>
-      </box>
-    </box>
-  )
-}
-
-function showRenameTaskDialog(
-  dialog: DialogContext,
-  currentTitle: string,
-  opts: { dialogTitle?: string } = {},
-): Promise<string | undefined> {
-  return new Promise<string | undefined>((resolve) => {
-    dialog.replace(
-      () => (
-        <RenameTaskDialog
-          currentTitle={currentTitle}
-          dialogTitle={opts.dialogTitle}
-          onSubmit={(v) => resolve(v)}
-          onCancel={() => resolve(undefined)}
-        />
-      ),
-      () => resolve(undefined),
-    )
-  })
-}
+// Rename-task dialog lives in `./component/rename-task-dialog/` and
+// shares `stripNewlines` with the new-task dialog (opentui's `<input>`
+// quirk that inserts a literal `\n` on Enter).
 
 /* --------------------------------------------------------------------- */
 /*  Top-level Shell                                                       */
@@ -1004,7 +927,7 @@ function Shell(props: AppDeps) {
   async function confirmRenameTask(taskId: string): Promise<void> {
     const task = props.orchestrator.getTask(taskId)
     if (!task) return
-    const next = await showRenameTaskDialog(dialog, task.title)
+    const next = await RenameTaskDialog.show(dialog, task.title)
     if (next === undefined) return
     try {
       await props.orchestrator.setTitle(taskId, next)
@@ -1032,7 +955,7 @@ function Shell(props: AppDeps) {
     if (!tab) return
     const fallback = `chat ${tab.seq}`
     const current = tab.title && tab.title.length > 0 ? tab.title : fallback
-    const next = await showRenameTaskDialog(dialog, current, { dialogTitle: "Rename chat tab" })
+    const next = await RenameTaskDialog.show(dialog, current, { dialogTitle: "Rename chat tab" })
     if (next === undefined) return
     try {
       await props.orchestrator.setTabTitle(taskId, tabId, next)
