@@ -377,11 +377,20 @@ export function Chat(props: ChatProps) {
       setActiveTabIdLocal(task.activeTabId)
       queueMicrotask(scrollToBottom)
     } else {
-      // Same task, tabs may have changed — mirror persisted
-      // activeTabId only when local is null or pointing at a closed
-      // tab (don't clobber the user's local switch).
+      // Same task, tabs / activeTabId may have changed. Mirror the
+      // persisted activeTabId whenever it diverges from local — this is
+      // what makes external tab-switches (e.g. clicking a chat-tab chip
+      // in the workspace strip, which calls `orchestrator.setActiveTab`
+      // directly without touching this component) actually drive the
+      // chat view. Internal switches via `selectTabByIndex`/`cycleTab`
+      // also call `setActiveTab`, but they set `activeTabIdLocal` first
+      // so this branch sees `local === task.activeTabId` and no-ops.
+      // Earlier the guard was "only sync when local is null or pointing
+      // at a closed tab" — that ignored legitimate external switches and
+      // produced "switched the chip but chat content stayed on the old
+      // tab" (KOB-21).
       const local = activeTabId()
-      if (!local || !task.tabs.some((t) => t.id === local)) {
+      if (local !== task.activeTabId) {
         setActiveTabIdLocal(task.activeTabId)
       }
     }
