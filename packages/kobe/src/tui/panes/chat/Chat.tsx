@@ -39,7 +39,7 @@
 
 import { type ScrollBoxRenderable, TextAttributes } from "@opentui/core"
 import { type Accessor, For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount } from "solid-js"
-import type { Orchestrator } from "../../../orchestrator/core.ts"
+import type { KobeOrchestrator } from "../../../client/remote-orchestrator.ts"
 import type { OrchestratorEvent, PermissionMode } from "../../../types/engine.ts"
 import type { ChatTab } from "../../../types/task.ts"
 import { ResumeDialog } from "../../component/resume-dialog"
@@ -62,14 +62,13 @@ import {
   dequeueFirst,
   enqueuePrompt,
   pushSystemError,
-  pushUser,
   queueIsFull,
   removeFromQueue,
   setMessagesFromHistory,
 } from "./store"
 
 export type ChatProps = {
-  orchestrator: Orchestrator
+  orchestrator: KobeOrchestrator
   /**
    * Solid accessor for the currently selected task id. We accept an
    * accessor (not a static prop) so task switches re-run effects
@@ -549,13 +548,14 @@ export function Chat(props: ChatProps) {
         patchActiveState((s) => {
           const [next, popped] = dequeueFirst(s)
           head = popped
-          if (!popped) return s
-          // Push the user row immediately so the chat scrolls to the
-          // dispatched prompt at the same time the runTask call goes
-          // out (the engine will fire its own user.inject if needed,
-          // but for pure-queue dispatch the row is ours to write).
-          return pushUser(next, popped.text)
+          return next
         })
+        // The user row appears via the orchestrator's user.inject
+        // event fired at the start of runTask. Pushing it locally
+        // here used to be the source of truth, but that bypassed
+        // the daemon's broadcast so other attached TUIs never saw
+        // the user message — leaving their chat looking like one
+        // long unbroken assistant ramble.
         const dispatched = head as { id: string; text: string; ts: string } | null
         if (!dispatched) return
         try {
@@ -615,8 +615,8 @@ export function Chat(props: ChatProps) {
       }
       // The pump's `finally` flips isStreaming false via the `done`
       // event; the drain effect won't run because we own the next
-      // dispatch. Push the user row + run synchronously.
-      patchActiveState((s) => pushUser(s, text))
+      // dispatch. runTask fires user.inject at the start, so the
+      // user row lands via the event bus (no local pushUser).
       try {
         await props.orchestrator.runTask(taskId, text, tabId)
       } catch (err) {
@@ -637,9 +637,9 @@ export function Chat(props: ChatProps) {
       return
     }
 
-    // Idle path — original behaviour.
+    // Idle path. runTask fires user.inject at the start, so the
+    // user row lands via the event bus (no local pushUser).
     setDraft("")
-    patchActiveState((s) => pushUser(s, text))
     try {
       await props.orchestrator.runTask(taskId, text, tabId)
     } catch (err) {

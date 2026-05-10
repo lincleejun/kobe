@@ -18,12 +18,12 @@
 
 import { TextAttributes } from "@opentui/core"
 import type { Accessor } from "solid-js"
-import type { Orchestrator } from "../../orchestrator/core.ts"
+import type { KobeOrchestrator } from "../../client/remote-orchestrator.ts"
 import type { Task } from "../../types/task.ts"
 import { useTheme } from "../context/theme"
 
 export type CreatePRButtonProps = {
-  orchestrator: Orchestrator
+  orchestrator: KobeOrchestrator
   /**
    * Solid accessor for the currently active task. Undefined when no
    * task is selected; a task with empty `worktreePath` indicates the

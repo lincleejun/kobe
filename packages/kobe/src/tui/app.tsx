@@ -27,6 +27,8 @@ import { TextAttributes } from "@opentui/core"
 import { render, useRenderer, useTerminalDimensions } from "@opentui/solid"
 import { type Accessor, For, Show, createEffect, createMemo, createSignal, on, onMount } from "solid-js"
 import pkg from "../../package.json" with { type: "json" }
+import { connectOrStartDaemon } from "../client/daemon-process.ts"
+import { type KobeOrchestrator, RemoteOrchestrator } from "../client/remote-orchestrator.ts"
 import { ClaudeCodeLocal } from "../engine/claude-code-local/index.ts"
 import { type ChatRunState, Orchestrator, chatRunStateKey } from "../orchestrator/core.ts"
 import { TaskIndexStore } from "../orchestrator/index/store.ts"
@@ -784,7 +786,7 @@ function showRenameTaskDialog(
 /* --------------------------------------------------------------------- */
 
 export type AppDeps = {
-  orchestrator: Orchestrator
+  orchestrator: KobeOrchestrator
 }
 
 /* --------------------------------------------------------------------- */
@@ -942,7 +944,7 @@ function StatusBar() {
 }
 
 function TopBar(props: {
-  orchestrator: Orchestrator
+  orchestrator: KobeOrchestrator
   activeTask: Accessor<Task | undefined>
   updateInfo: Accessor<UpdateInfo | null>
 }) {
@@ -2127,22 +2129,27 @@ export async function startApp(): Promise<void> {
   for (const { name, theme } of loadUserThemes()) {
     addTheme(name, theme)
   }
-  const engine = await buildEngine()
   const homeDir = process.env.KOBE_HOME_DIR ?? homedir()
-  const store = new TaskIndexStore({ homeDir })
-  await store.load()
-  const worktrees = new GitWorktreeManager()
-  const orchestrator = new Orchestrator({ engine, store, worktrees })
-  // Bridge: bind a Unix-socket RPC server + write an MCP config so
-  // every claude subprocess kobe spawns gets the `kobe_*` tools
-  // (spawn_task, list_tasks, ...). Best-effort — a bridge failure
-  // logs but never blocks the TUI from booting.
-  try {
-    const { startBridge } = await import("../orchestrator/bridge/index.ts")
-    await startBridge(orchestrator, { homeDir })
-  } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error("[kobe] bridge failed to start:", err)
+  let orchestrator: KobeOrchestrator
+  if (process.env.KOBE_TEST_ENGINE || process.env.KOBE_NO_DAEMON === "1") {
+    const engine = await buildEngine()
+    const store = new TaskIndexStore({ homeDir })
+    await store.load()
+    const worktrees = new GitWorktreeManager()
+    orchestrator = new Orchestrator({ engine, store, worktrees })
+    // Bridge: bind a Unix-socket RPC server + write an MCP config so
+    // every claude subprocess kobe spawns gets the `kobe_*` tools.
+    try {
+      const { startBridge } = await import("../orchestrator/bridge/index.ts")
+      await startBridge(orchestrator, { homeDir })
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error("[kobe] bridge failed to start:", err)
+    }
+  } else {
+    const client = await connectOrStartDaemon()
+    orchestrator = new RemoteOrchestrator(client)
+    await orchestrator.init()
   }
   // KOB-15: seed a pinned "main" task per saved repo. Idempotent:
   // ensureMainTask returns the existing main task on subsequent boots.

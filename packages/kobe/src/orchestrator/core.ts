@@ -58,7 +58,7 @@
  */
 
 import { type Accessor, createSignal } from "solid-js"
-import { resolveDefaultModelId } from "../tui/panes/chat/composer/claude-settings.ts"
+import { resolveDefaultModelId } from "../engine/claude-settings.ts"
 import type {
   AIEngine,
   AskQuestionEntry,
@@ -230,6 +230,8 @@ export type Unsubscribe = () => void
  * mask the distinction.
  */
 export type ChatRunState = "running" | "awaiting_input" | "idle"
+
+export type TaskListListener = (snapshot: readonly Task[]) => void
 
 /**
  * Compose the composite key used by {@link Orchestrator.chatRunStateSignal}
@@ -421,6 +423,10 @@ export class Orchestrator {
   /** Solid `Accessor` that yields the current task list. */
   tasksSignal(): Accessor<Task[]> {
     return this.tasksAcc
+  }
+
+  subscribeTasks(listener: TaskListListener): Unsubscribe {
+    return this.store.subscribe(listener)
   }
 
   /**
@@ -775,6 +781,29 @@ export class Orchestrator {
     // chatting" doesn't trip.
     const promptToSend = prompt && prompt.length > 0 ? prompt : " "
 
+    // Broadcast the user's prompt as a user.inject event BEFORE
+    // touching the engine. Two reasons:
+    //   1. Multi-attach correctness — the chat composer used to
+    //      `pushUser(state, text)` locally, which meant other clients
+    //      attached to the same daemon never received the user row.
+    //      Going through dispatchEvent puts the user message on the
+    //      same per-task event bus the daemon broadcasts to every
+    //      attached TUI.
+    //   2. Message-boundary correctness — the chat's assistant.delta
+    //      reducer concatenates consecutive deltas into the most
+    //      recent assistant row. Without a user row between two
+    //      turns, the second response's deltas merge into the first
+    //      assistant bubble. Emitting user.inject here re-anchors the
+    //      conversation so the next assistant.delta starts a new row.
+    // Blank prompts (the resume/continue path) intentionally skip the
+    // dispatch — there's no user-visible message to inject. Note
+    // requestPR and respondToInput previously dispatched user.inject
+    // themselves; with this change those redundant dispatches are
+    // removed so each user message hits the bus exactly once.
+    if (prompt && prompt.trim().length > 0) {
+      this.dispatchEvent(task.id, targetTab.id, { type: "user.inject", text: prompt })
+    }
+
     // Model resolution: per-task pin → claude-code's
     // `~/.claude/settings.json` `model` key → kobe's hardcoded
     // FALLBACK_DEFAULT_MODEL_ID (opus 4.7 [1m]). Mirrors claude-code's
@@ -877,15 +906,10 @@ export class Orchestrator {
     const state = await gatherPRState(task.worktreePath)
     const template = await loadPRInstructionsTemplate(task.worktreePath)
     const prompt = renderPRInstructions(template, state)
-    // Broadcast the synthetic user-inject event BEFORE runTask so the
-    // chat renders the injected prompt as a normal user row in the same
-    // tick the streaming starts. Subscribers swallow their own errors
-    // (see dispatchEvent), so an unrelated subscriber failure here
-    // can't poison the runTask call. PR injection always targets the
-    // task's currently-active tab (the user pressed the button while
-    // looking at it).
+    // PR injection always targets the task's currently-active tab
+    // (the user pressed the button while looking at it). runTask
+    // itself dispatches the user.inject — no need to do it twice.
     const activeTab = this.resolveTab(task)
-    this.dispatchEvent(task.id, activeTab.id, { type: "user.inject", text: prompt })
     await this.runTask(task.id, prompt, activeTab.id)
   }
 
@@ -925,22 +949,23 @@ export class Orchestrator {
     this.pendingInputRequestTab.delete(requestId)
     this.bumpRunState()
 
-    // Tell the chat the row is no longer pending. Fire BEFORE the
-    // synthetic user.inject so the approval banner flips to its final
-    // state in the same render frame the new user row appears.
+    // Tell the chat the row is no longer pending. Fire BEFORE runTask
+    // so the approval banner flips to its final state in the same
+    // render frame the synthetic user row appears.
     // Multi-tab caveat: pendingInput is keyed by taskId only (not
-    // tabId) so we route the resolved/inject events through the
-    // task's active tab. In single-tab tasks this matches exactly;
-    // for multi-tab, an approval surfaced from a non-active tab will
-    // still resolve correctly but the chat banner update lands on the
-    // active tab. Tightening this requires storing tabId in
+    // tabId) so we route the resolved event through the task's
+    // active tab. In single-tab tasks this matches exactly; for
+    // multi-tab, an approval surfaced from a non-active tab will
+    // still resolve correctly but the chat banner update lands on
+    // the active tab. Tightening this requires storing tabId in
     // pendingInput, which is a follow-up.
     const tabId = task.activeTabId
     this.dispatchEvent(task.id, tabId, { type: "user_input.resolved", requestId, response })
 
     const prompt = renderUserInputResponsePrompt(pending, response)
     if (!prompt) return
-    this.dispatchEvent(task.id, tabId, { type: "user.inject", text: prompt })
+    // runTask itself dispatches the user.inject for the synthetic
+    // prompt — no need to fire it explicitly here.
     await this.runTask(task.id, prompt, tabId)
   }
 
@@ -991,6 +1016,16 @@ export class Orchestrator {
       this.handles.delete(key)
       this.bumpRunState()
     }
+    // engine.stop terminates the stream() iterator without yielding a
+    // done/error event — the for-await in pumpEvents just returns. So
+    // the pump never dispatches a terminal event and the chat reducer
+    // keeps `isStreaming = true`, leaving the "thinking" / Harmonizing
+    // indicator spinning forever after a bare ESC interrupt. Synthesize
+    // a `done` here so the UI flips back to idle. For the steer flow
+    // (interrupt + new prompt), the immediately-following runTask
+    // emits user.inject which re-arms isStreaming — the false→true
+    // flicker is the correct render: prior turn ended, new turn begins.
+    this.dispatchEvent(task.id, targetTab.id, { type: "done" })
   }
 
   /**

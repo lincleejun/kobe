@@ -9,6 +9,12 @@
   "workspaces": ["packages/*"],
   "scripts": {
     "dev": "cd packages/kobe && bun run dev",
+    "dev:test": "cd packages/kobe && bun run dev:test",
+    "dev:test:reset": "cd packages/kobe && bun run dev:test:reset",
+    "daemon": "cd packages/kobe && bun run src/bin/kobed.ts start",
+    "daemon:stop": "cd packages/kobe && bun run src/bin/kobed.ts stop",
+    "daemon:restart": "cd packages/kobe && bun run src/bin/kobed.ts restart",
+    "daemon:status": "cd packages/kobe && bun run src/bin/kobed.ts status",
     "build": "bun --filter @sma1lboy/kobe build",
     "typecheck": "bun --filter @sma1lboy/kobe typecheck",
     "test": "bun --filter @sma1lboy/kobe test",

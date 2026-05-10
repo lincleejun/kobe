@@ -25,7 +25,7 @@
  * `get_project_sessions` algorithm in `engine/claude-code-local/sessions.ts`.
  */
 
-import type { Orchestrator } from "@/orchestrator/core"
+import type { KobeOrchestrator } from "@/client/remote-orchestrator"
 import type { SessionMeta } from "@/types/engine"
 import { TextAttributes } from "@opentui/core"
 import { For, Show, createMemo, createResource, createSignal } from "solid-js"
@@ -43,7 +43,7 @@ export const RESUME_DIALOG_EMPTY = "No prior sessions in this task's worktree."
 export const RESUME_DIALOG_FOOTER = "j/k or ↑↓ navigate • enter resume • esc dismiss"
 
 export interface ResumeDialogProps {
-  orchestrator: Orchestrator
+  orchestrator: KobeOrchestrator
   taskId: string
 }
 
@@ -167,7 +167,7 @@ export function ResumeDialog(props: ResumeDialogProps) {
  * Convenience opener — pushes the resume dialog onto the dialog stack.
  * Used by the global `chat.session.resume` chord.
  */
-ResumeDialog.show = (dialog: DialogContext, orchestrator: Orchestrator, taskId: string): void => {
+ResumeDialog.show = (dialog: DialogContext, orchestrator: KobeOrchestrator, taskId: string): void => {
   dialog.replace(() => <ResumeDialog orchestrator={orchestrator} taskId={taskId} />)
 }
 

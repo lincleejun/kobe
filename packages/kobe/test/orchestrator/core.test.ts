@@ -1233,10 +1233,15 @@ describe("Orchestrator.respondToInput", () => {
     expect(resolved?.requestId).toBe(req?.requestId)
     expect(resolved?.response).toEqual({ kind: "approve_plan", approve: true })
 
-    const inject = events.find(
+    // Two user.inject events fire in this flow now: the initial "go"
+    // prompt (broadcast by runTask itself, so multi-attach clients see
+    // the user message) and the synthetic approval-response prompt
+    // from respondToInput. The synthetic one is what we care about
+    // here — it's the last user.inject.
+    const injects = events.filter(
       (e): e is Extract<OrchestratorEvent, { type: "user.inject" }> => e.type === "user.inject",
     )
-    expect(inject?.text.toLowerCase()).toContain("approved")
+    expect(injects[injects.length - 1]?.text.toLowerCase()).toContain("approved")
   })
 
   test("respondToInput is a no-op for unknown requestId (e.g. double-click race)", async () => {
@@ -1298,9 +1303,12 @@ describe("Orchestrator.respondToInput", () => {
     )
     expect(resolved?.response).toEqual({ kind: "ask_question", answers: { "Which library?": "date-fns" } })
 
-    const inject = events.find(
+    // The synthetic answer prompt is the LAST user.inject — the first
+    // is runTask broadcasting the initial "go" prompt so multi-attach
+    // clients receive it.
+    const injects = events.filter(
       (e): e is Extract<OrchestratorEvent, { type: "user.inject" }> => e.type === "user.inject",
     )
-    expect(inject?.text).toContain("Which library? → date-fns")
+    expect(injects[injects.length - 1]?.text).toContain("Which library? → date-fns")
   })
 })

@@ -8,18 +8,18 @@
  * plugins via flags, so we drive the build from a script that
  * registers the same Solid transform plugin first.
  *
- * Output: `dist/index.js` with `#!/usr/bin/env bun` shebang (preserved
- * from `src/cli/index.ts`) and 755 perms so `npm install -g` produces
- * a runnable `kobe` binary.
+ * Output: `dist/index.js` and `dist/kobed.js` with `#!/usr/bin/env bun`
+ * shebangs and 755 perms so `npm install -g` produces runnable `kobe`
+ * and `kobed` binaries.
  */
 
 import { chmod } from "node:fs/promises"
 import { createSolidTransformPlugin } from "@opentui/solid/bun-plugin"
 
-const OUT_FILE = "./dist/index.js"
+const OUT_FILES = ["./dist/index.js", "./dist/bin/kobed.js"]
 
 const result = await Bun.build({
-  entrypoints: ["./src/cli/index.ts"],
+  entrypoints: ["./src/cli/index.ts", "./src/bin/kobed.ts"],
   outdir: "./dist",
   target: "bun",
   conditions: ["browser"],
@@ -40,5 +40,5 @@ if (!result.success) {
   process.exit(1)
 }
 
-await chmod(OUT_FILE, 0o755)
-console.log(`built ${OUT_FILE}`)
+for (const file of OUT_FILES) await chmod(file, 0o755)
+console.log(`built ${OUT_FILES.join(", ")}`)
