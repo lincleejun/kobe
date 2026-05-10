@@ -6,14 +6,13 @@ import type {
   OrchestratorEvent,
   PermissionMode,
   SessionMeta,
-  UserInputPayload,
   UserInputResponse,
 } from "../types/engine.ts"
-import type { PendingInputBroker } from "../types/pending-input-broker.ts"
+import type { PendingInputBroker, PendingInputEntry } from "../types/pending-input-broker.ts"
 import type { ChatTab, Task } from "../types/task.ts"
 import type { KobeDaemonClient } from "./index.ts"
 
-type PendingInput = { requestId: string; payload: UserInputPayload }
+type PendingInput = PendingInputEntry
 export type KobeOrchestrator = Orchestrator | RemoteOrchestrator
 
 export class RemoteOrchestrator {
@@ -30,12 +29,11 @@ export class RemoteOrchestrator {
    * forward by listening to `user_input.request` / `user_input.resolved`
    * wire events.
    *
-   * Hydrated entries use the task's `activeTabId` as a fallback tabKey
-   * because the daemon's `chat.input.pending` response doesn't carry
-   * it. That's acceptable today because nothing on the remote side
-   * reads `awaitingTabKeys()` — run-state is driven by event handlers
-   * that already know the tabId. If a future caller needs accurate
-   * tabKeys from hydration, extend the daemon protocol to echo them.
+   * Each wire snapshot entry carries its own `tabKey`, so hydration
+   * attributes pause requests to the tab that actually fired them —
+   * not the task's currently-active tab. That difference matters for
+   * pause requests fired against a non-active tab, where the old
+   * `activeTabId` fallback misrouted the awaiting-input dot.
    */
   private readonly pendingInputBroker: PendingInputBroker = new InMemoryPendingInputBroker()
 
@@ -66,9 +64,8 @@ export class RemoteOrchestrator {
           const pending = await this.client.request<{ pending: PendingInput[] }>("chat.input.pending", {
             taskId: task.id,
           })
-          const fallbackTabKey = `${task.id}:${task.activeTabId}`
           for (const entry of pending.pending) {
-            this.pendingInputBroker.record(task.id, fallbackTabKey, entry.requestId, entry.payload)
+            this.pendingInputBroker.record(task.id, entry.tabKey, entry.requestId, entry.payload)
           }
         } catch {
           /* per-task hydration is best-effort */
