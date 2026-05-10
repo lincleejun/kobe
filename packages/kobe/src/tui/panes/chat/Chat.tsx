@@ -633,9 +633,9 @@ export function Chat(props: ChatProps) {
   }
 
   // Pane-scoped keybindings: only fire when the chat pane is focused.
-  // chat.tab.pick (ctrl+1..9) is the table's single chat-tab-pick id; we
-  // gate it on `tabs().length > 1` so we don't shadow app.tsx's global
-  // "ctrl+1..4 = pane focus" muscle memory when there's only one tab.
+  // chat.tab.pick uses `alt+1..9` so it never shadows the global
+  // `ctrl+1..4 = pane focus` chord — pane focus has hard precedence
+  // and must work the same in every pane (see docs/KEYBINDINGS.md).
   useBindings(() => {
     const tabsOpen = tabs().length
     return {

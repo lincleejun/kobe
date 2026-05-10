@@ -402,11 +402,16 @@ export const KobeKeymap: readonly KobeBinding[] = [
     description: "Previous chat tab",
   },
   {
+    // Use `alt+N` (NOT `ctrl+N`) — ctrl+1..4 is reserved for the
+    // global focus.numeric (pane focus) and was being shadowed in
+    // workspace + multi-tab. alt+1..9 stays out of focus.numeric's
+    // way and out of composer typing (alt-prefixed chords don't
+    // produce printable input).
     id: "chat.tab.pick",
     scope: "workspace",
-    keys: ["ctrl+1", "ctrl+2", "ctrl+3", "ctrl+4", "ctrl+5", "ctrl+6", "ctrl+7", "ctrl+8", "ctrl+9"],
+    keys: ["alt+1", "alt+2", "alt+3", "alt+4", "alt+5", "alt+6", "alt+7", "alt+8", "alt+9"],
     category: "Workspace",
-    description: "Pick chat tab N (when >1 tab open; shadows focus.numeric)",
+    description: "Pick chat tab N (alt+1..9 when >1 tab open)",
   },
 
   // ─── Files ────────────────────────────────────────────────────────────
