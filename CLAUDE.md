@@ -7,6 +7,7 @@ Goal: build a TUI that mimics Conductor's UX (multi-task AI orchestration), with
 2. [`docs/DESIGN.md`](./docs/DESIGN.md) — design philosophy, architecture, tech stack lock-in.
 3. [`docs/PLAN.md`](./docs/PLAN.md) — Phase 0 → Phase 1 stream/wave plan.
 4. [`docs/HARNESS.md`](./docs/HARNESS.md) — agent self-test contract. **Load-bearing.**
+5. [`docs/KEYBINDINGS.md`](./docs/KEYBINDINGS.md) — pane-scope rules + boundary patterns. Read before adding/moving any chord.
 
 The architecture decisions are not obvious from the code (the code is mostly empty). The docs are the source of truth.
 
@@ -52,6 +53,73 @@ git clone --depth 1 https://github.com/tanbiralam/claude-code.git
 - "How does Claude Code render <X>?" (where X = stream content, tool call display, prompt formatting, etc.) → `claude-code/src/ink/`.
 
 If a ref disagrees with kobe's existing implementation, kobe wins (we already chose) — but read the ref before deciding to deviate further.
+
+## Issue tracking — Linear
+
+kobe **code-level** work is tracked in Linear. The Linear project is the product scoreboard — what's been built and what's queued; commit history is the proof.
+
+| | |
+|---|---|
+| Workspace | [`codesfox`](https://linear.app/codesfox) |
+| Team | `KOB` (Kobe) |
+| Active project | `Pre-1.0 整理` |
+| Workspace labels | `Bug`, `Chore`, `Doc`, `Feature`, `Featurebase`, `Tech Debt` |
+
+### What to file
+
+**File:** features, bug fixes, refactors, product follow-ups, design decisions that change what kobe *does*.
+
+**Don't file:** tool/process/meta work — CLAUDE.md edits, `.claude/skills/...` rewrites, memory tweaks, agent config, dev-env setup. Linear is not a meta-changelog.
+
+Litmus test: *does this change kobe's behavior, code, or product surface?* Yes → file. No → skip.
+
+### Lifecycle
+
+1. **File** when the work starts (or when a forward requirement surfaces in chat).
+2. **Do the work** — code, test, harness self-validation.
+3. **Mark Done** the moment it lands: `linear issue update KOB-N --state Done`.
+4. **Link the commit** — either reference `KOB-N` in the commit message (Linear's GitHub integration auto-links) or attach a comment with the SHA via `linear issue comment add KOB-N --body-file ...`.
+
+Exception to "mark Done immediately": forward requirements ("we'll need X eventually") stay open in `Todo` / `Backlog` until actually picked up.
+
+### Tooling — `linear` CLI, not MCP
+
+We use [`schpet/linear-cli`](https://github.com/schpet/linear-cli), not the Linear MCP server. The MCP path was flaky; the CLI is `brew`-installed, scriptable, and authenticated once via system keyring.
+
+**Install + auth (one-time per dev / per agent host):**
+
+```bash
+brew install schpet/tap/linear-cli   # or whatever your platform's install path is
+linear auth login                     # interactive browser OAuth — user must do this
+linear auth whoami                    # verify: should print Workspace + User
+```
+
+Agents who find `linear` missing on PATH should surface to the user — do not try to fall back to the MCP, and do not silently skip filing.
+
+### Cheat sheet
+
+```bash
+# Create
+cat > /tmp/issue-body.md <<'EOF'
+<markdown body — context, scope, open questions>
+EOF
+linear issue create \
+  --team KOB --project "Pre-1.0 整理" \
+  --title "<short imperative title>" \
+  --description-file /tmp/issue-body.md \
+  --label "Feature" --no-interactive
+
+# Close on completion
+linear issue update KOB-N --state Done
+linear issue comment add KOB-N --body-file /tmp/done-note.md   # commit SHA goes here
+```
+
+Notes:
+- `--no-interactive` is a **create-only** flag. `update` has no such flag — just pass the change directly.
+- Always use `--description-file` / `--body-file` for any markdown body — `-d "..."` / `-b "..."` mangles newlines and shell-quoting.
+- Surface the issue URL after every create / state change.
+
+Full skill at [`.claude/skills/linear/SKILL.md`](./.claude/skills/linear/SKILL.md).
 
 ## Operating model — agent teams + self-validation
 
