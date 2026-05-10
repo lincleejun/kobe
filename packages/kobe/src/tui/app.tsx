@@ -46,9 +46,10 @@ import { FocusProvider, type PaneId, useFocus } from "./context/focus"
 import { useKobeKeybindings } from "./context/keybindings"
 import { KVProvider, useKV } from "./context/kv"
 import { SyncProvider } from "./context/sync"
-import { FOCUS_ACCENT_SLOTS, type FocusAccentSlot, ThemeProvider, addTheme, useTheme } from "./context/theme"
+import { ThemeProvider, addTheme, useTheme } from "./context/theme"
 import { loadUserThemes } from "./context/theme/loader"
 import { useAppKeymap } from "./app-keymap"
+import { useThemePersistence } from "./lib/use-theme-persistence"
 import { Chat } from "./panes/chat/Chat"
 import { FileTree } from "./panes/filetree"
 import { Preview, type PreviewApi } from "./panes/preview"
@@ -89,40 +90,11 @@ function Shell(props: AppDeps) {
   const dialog = useDialog()
   const kv = useKV()
 
-  // Theme persistence — on mount, hydrate from KV (validates the
-  // stored name against the bundled list to drop stale entries from a
-  // theme that was renamed). On every theme switch, persist the new
-  // name. Same shape for the orthogonal `transparentBackground` toggle.
-  // ThemeProvider is mounted OUTER of KVProvider, so we hydrate here
-  // rather than inside ThemeProvider's init.
-  const persistedTheme = kv.get("activeTheme")
-  if (typeof persistedTheme === "string" && themeCtx.has(persistedTheme)) {
-    themeCtx.set(persistedTheme)
-  }
-  const persistedTransparent = kv.get("transparentBackground")
-  if (typeof persistedTransparent === "boolean") {
-    themeCtx.setTransparentBackground(persistedTransparent)
-  }
-  // Focus-accent slot — same hydrate-then-mirror pattern. Validates
-  // against the known slot list so a stale value from an older kobe
-  // (or a hand-edited state.json) drops cleanly to default rather than
-  // poisoning the proxy.
-  const persistedFocusAccent = kv.get("focusAccent")
-  if (
-    typeof persistedFocusAccent === "string" &&
-    (FOCUS_ACCENT_SLOTS as ReadonlyArray<string>).includes(persistedFocusAccent)
-  ) {
-    themeCtx.setFocusAccent(persistedFocusAccent as FocusAccentSlot)
-  }
-  createEffect(() => {
-    kv.set("activeTheme", themeCtx.selected)
-  })
-  createEffect(() => {
-    kv.set("transparentBackground", themeCtx.transparentBackground)
-  })
-  createEffect(() => {
-    kv.set("focusAccent", themeCtx.focusAccent)
-  })
+  // Theme / KV round-trip — hydrate once on mount, then mirror every
+  // change back. See `./lib/use-theme-persistence.ts` for the three
+  // round-trips (activeTheme, transparentBackground, focusAccent) and
+  // why the hydrate has to happen here rather than inside ThemeProvider.
+  useThemePersistence(themeCtx, kv)
 
   const tasksAcc: Accessor<ReturnType<typeof props.orchestrator.listTasks>> = props.orchestrator.tasksSignal()
   // Live per-task engine state (running / awaiting_input / idle) for
