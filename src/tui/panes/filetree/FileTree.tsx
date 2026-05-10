@@ -359,9 +359,7 @@ export function FileTree(props: FileTreeProps) {
           }
         >
           <box paddingTop={1} paddingLeft={1}>
-            <text fg={theme.textMuted}>
-              {tab() === "all" ? "(empty worktree)" : "(no changes — clean worktree)"}
-            </text>
+            <text fg={theme.textMuted}>{tab() === "all" ? "(empty worktree)" : "(no changes — clean worktree)"}</text>
           </box>
         </Show>
 

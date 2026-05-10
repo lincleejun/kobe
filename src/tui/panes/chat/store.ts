@@ -104,8 +104,7 @@ function capMessages(messages: readonly ChatRow[], nowIso: string): readonly Cha
   if (messages.length <= SCROLLBACK_CAP) return messages
 
   const head = messages[0]
-  const existingDropped =
-    head && head.kind === "system" ? parseSentinelCount(head.text) : null
+  const existingDropped = head && head.kind === "system" ? parseSentinelCount(head.text) : null
 
   // Slice from `start` to the end keeps the most-recent rows. When
   // there's no existing sentinel we reserve one slot for the new one

@@ -99,7 +99,8 @@ export function summarizePreviewError(raw: string): string {
   const m = raw.toLowerCase()
   if (m.includes("no such file") || m.includes("enoent")) return "file not found (rebased away?)"
   if (m.includes("permission denied") || m.includes("eacces")) return "permission denied"
-  if (m.includes("ambiguous argument") || m.includes("unknown revision")) return "diff base does not resolve in this worktree"
+  if (m.includes("ambiguous argument") || m.includes("unknown revision"))
+    return "diff base does not resolve in this worktree"
   if (m.includes("path escapes worktree")) return "refused: path escapes worktree"
   if (m.includes("no worktree")) return "no active worktree"
   // Fallback: strip a `prog: path: ` prefix if present.

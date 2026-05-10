@@ -346,14 +346,12 @@ export function Terminal(props: TerminalProps): JSXElement {
         when={pty()}
         fallback={
           <box flexGrow={1} paddingLeft={2} paddingTop={1} flexDirection="column" gap={0}>
-            <Show
-              when={acquireError()}
-              fallback={
-                <text fg={theme.textMuted}>(no task — press n to create)</text>
-              }
-            >
+            <Show when={acquireError()} fallback={<text fg={theme.textMuted}>(no task — press n to create)</text>}>
               <text fg={theme.error} wrapMode="word">
-                terminal unavailable — {isTmuxMissing(acquireError() ?? "") ? "tmux is not installed (try `brew install tmux` or set KOBE_TMUX_BIN)" : "shell could not start"}
+                terminal unavailable —{" "}
+                {isTmuxMissing(acquireError() ?? "")
+                  ? "tmux is not installed (try `brew install tmux` or set KOBE_TMUX_BIN)"
+                  : "shell could not start"}
               </text>
               <text fg={theme.textMuted} wrapMode="word">
                 {acquireError()}
