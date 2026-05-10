@@ -58,6 +58,21 @@ export function kobeStateDir(): string {
 }
 
 /**
+ * Path to the small flat-JSON KV blob shared between the TUI's
+ * `KVProvider` (src/tui/context/kv.tsx) and CLI-side modules like
+ * `src/state/repos.ts`. Both must agree on this path or the picker
+ * stops seeing what `kobe add` wrote. Defaults to
+ * `~/.config/kobe/state.json`; honours `KOBE_HOME_DIR` so tests can
+ * isolate via tmpdir.
+ *
+ * The TUI's `kv.tsx` predates this helper and still hardcodes the
+ * same expression — keep them in sync if either moves.
+ */
+export function kvStatePath(): string {
+  return join(homeDir(), ".config", "kobe", "state.json")
+}
+
+/**
  * `KOBE_TMUX_BIN` — path to the tmux binary the embedded terminal
  * pane should spawn. Defaults to `tmux` (resolved against PATH).
  * Mostly for hosts where tmux is installed under a non-standard
