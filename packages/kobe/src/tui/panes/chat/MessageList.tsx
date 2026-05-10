@@ -110,6 +110,14 @@ export interface MessageListProps {
    * an in-flight first turn doesn't briefly flash "Type a prompt below."
    */
   showEmptyPlaceholder: boolean
+  /**
+   * Index of one row to skip rendering, or null. Used by the chat
+   * shell to lift a still-pending approval/question picker out of
+   * the transcript and render it inline above the composer instead —
+   * once resolved the row stops being skipped and shows up here as
+   * the "answered" version.
+   */
+  hideRowIndex?: number | null
   /** Optional banner-state error message. Renders below the list. */
   error: string | null
   /**
@@ -704,7 +712,7 @@ function SystemRow(props: { text: string }) {
  *   - `rejected` — error-colored "Plan rejected" header, "rejected"
  *                  chip. Plan stays visible so the user can scroll back.
  */
-function ApprovalRow(props: {
+export function ApprovalRow(props: {
   row: Extract<ChatRow, { kind: "approval" }>
   onApprove: (approve: boolean) => void
 }) {
@@ -796,7 +804,7 @@ function ApprovalRow(props: {
  *     option labels (`"Option A, Option C"`). Single-select is just
  *     the label.
  */
-function QuestionRow(props: {
+export function QuestionRow(props: {
   row: Extract<ChatRow, { kind: "question" }>
   onAnswer: (answers: Record<string, string>) => void
 }) {
@@ -975,6 +983,7 @@ export function MessageList(props: MessageListProps) {
           }
           const row = item.row
           const i = item.index
+          if (props.hideRowIndex != null && i === props.hideRowIndex) return null
           if (row.kind === "user") return <UserRow text={row.text} />
           if (row.kind === "assistant") return <AssistantRow text={row.text} />
           if (row.kind === "system") return <SystemRow text={row.text} />
