@@ -6,7 +6,7 @@ import {
 } from "../../src/tui/panes/chat/context-meter.ts"
 
 describe("context-meter", () => {
-  it("totals billed context fields", () => {
+  it("totals prompt-side tokens only (excludes output)", () => {
     expect(
       totalContextTokens({
         input_tokens: 1000,
@@ -14,7 +14,7 @@ describe("context-meter", () => {
         cache_read_input_tokens: 2000,
         cache_creation_input_tokens: 100,
       }),
-    ).toBe(3600)
+    ).toBe(3100)
   })
 
   it("maps [1m] models to 1M window", () => {
@@ -27,6 +27,6 @@ describe("context-meter", () => {
       { input_tokens: 20_000, output_tokens: 2000, cache_read_input_tokens: 50_000 },
       "claude-sonnet-4-6",
     )
-    expect(label).toBe("36% · 72k/200k")
+    expect(label).toBe("35% · 70k/200k")
   })
 })

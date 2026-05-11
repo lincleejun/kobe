@@ -16,9 +16,18 @@ export type UsageSnapshot = {
   readonly cache_creation_input_tokens?: number
 }
 
-/** Sum billed tokens that occupy context (matches common API usage breakdown). */
+/**
+ * Sum the tokens that occupy the model's context window on the next turn.
+ *
+ * The window holds the *prompt* sent to the model, which is the sum of
+ * uncached input, cache-creation input, and cache-read input. `output_tokens`
+ * is what the model just generated — billable, but not yet "in context"
+ * for the meter; folding it in inflates the displayed usage past 100% on
+ * heavy turns. This mirrors the canonical Claude Code formula
+ * (`refs/claude-code/src/utils/context.ts` `calculateContextPercentages`).
+ */
 export function totalContextTokens(u: UsageSnapshot): number {
-  return u.input_tokens + u.output_tokens + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0)
+  return u.input_tokens + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0)
 }
 
 const LONG_CTX = 1_000_000
