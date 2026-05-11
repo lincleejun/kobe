@@ -14,6 +14,12 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-05-10
+
+### Fixed
+
+- **Workspace focus reliably returns to the chat input** — clicking a chat-tab chip, re-clicking inside the workspace, or interacting with the MessageList while the workspace pane was already focused used to leave native opentui focus on whatever child the click landed on, so the composer textarea silently stopped receiving keystrokes; the focus context now ticks a refocus signal on every `setFocused` call (same-pane included) and the composer mirrors it, so the textarea grabs focus on every workspace focus event whenever a chat tab is active (KOB-53).
+
 ## [0.5.2] - 2026-05-10
 
 ### Fixed
