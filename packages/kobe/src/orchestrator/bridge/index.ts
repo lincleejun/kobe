@@ -19,6 +19,7 @@
 import { writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join } from "node:path"
+import { fileURLToPath } from "node:url"
 import type { Orchestrator } from "../core.ts"
 import { type BridgeServer, startBridgeServer } from "./server.ts"
 
@@ -40,11 +41,16 @@ export async function startBridge(orch: Orchestrator, opts: StartBridgeOpts = {}
 
   const server: BridgeServer = await startBridgeServer(orch, socketPath)
 
-  // process.argv[1] is the script entry. In the built binary it's
-  // `dist/index.js`; in `bun run dev` it's `src/cli/index.ts`. Use
-  // process.execPath as the interpreter so the same row works in
-  // both modes without a packaged shim.
-  const entry = process.argv[1] ?? ""
+  // The mcp-bridge subcommand only exists in the `kobe` CLI entry
+  // (src/cli/index.ts → dist/cli/index.js), not in `kobed`. Resolve
+  // it relative to this module so the config is correct regardless
+  // of who called startBridge — kobed daemon, TUI no-daemon path, or
+  // test fixtures. Extension follows our own (`.ts` in dev, `.js` in
+  // the built bundle), keyed off import.meta.url. process.argv[1] is
+  // unsafe here: when kobed calls startBridge, argv[1] points at
+  // kobed.ts which has no mcp-bridge handler. See KOB-54.
+  const moduleExt = import.meta.url.endsWith(".ts") ? ".ts" : ".js"
+  const entry = fileURLToPath(new URL(`../../cli/index${moduleExt}`, import.meta.url))
   const mcpConfig = {
     mcpServers: {
       kobe: {
