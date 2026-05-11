@@ -65,8 +65,9 @@
  * actual byte path is ctrl+q.
  */
 
+import { CliRenderEvents } from "@opentui/core"
 import { useRenderer } from "@opentui/solid"
-import { type Accessor, createMemo, createSignal } from "solid-js"
+import { type Accessor, createMemo, createSignal, onCleanup } from "solid-js"
 import { type Binding, useBindings } from "../lib/keymap"
 import { type DialogContext, useDialog } from "../ui/dialog"
 import { DialogConfirm } from "../ui/dialog-confirm"
@@ -704,6 +705,38 @@ export function useKobeKeybindings(opts: KobeKeybindingsOpts): void {
   const onFocusNext = opts.onFocusNext ?? (() => {})
   const onFocusPrev = opts.onFocusPrev ?? (() => {})
   const onFocusDetach = opts.onFocusDetach ?? (() => {})
+
+  // Auto-copy on selection finish.
+  //
+  // Why this exists at all: a TUI's mouse selection is opentui's, not the
+  // terminal emulator's. When the user drags to highlight text in kobe,
+  // the terminal emulator never sees a "selection" — it sees a stream of
+  // mouse events that opentui consumes. So the OS-level Cmd+C (which on
+  // macOS Terminal.app / iTerm2 is handled at the AppKit layer and never
+  // reaches the TTY) has nothing to copy: the system clipboard stays
+  // whatever-it-was, the terminal emulator's "copy selected text" finds
+  // no native selection, and the user sees Cmd+C silently fail.
+  //
+  // The fix is to write opentui's selection text to the system clipboard
+  // *as soon as the drag ends*, via OSC52. After that, both Cmd+C
+  // (AppKit) and Ctrl+C (`app.copy_or_quit` handler below) become
+  // redundant — the clipboard already holds the text. Cmd+V / Ctrl+V
+  // anywhere just works.
+  //
+  // We use the `selection` event (CliRenderEvents.SELECTION) which opentui
+  // fires exactly once per drag, in `finishSelection()` on mouseup —
+  // never during the drag itself, so no per-frame OSC52 spam. Empty
+  // selections are skipped so a stray click doesn't blank the clipboard.
+  if (renderer) {
+    const onSelection = () => {
+      const text = renderer.getSelection()?.getSelectedText()
+      if (text && text.length > 0) renderer.copyToClipboardOSC52(text)
+    }
+    renderer.on(CliRenderEvents.SELECTION, onSelection)
+    onCleanup(() => {
+      renderer.off(CliRenderEvents.SELECTION, onSelection)
+    })
+  }
 
   // Ctrl+C: three modes, in order of precedence.
   //   1. Renderer has a text selection → copy via OSC52, clear selection,
