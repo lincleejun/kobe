@@ -55,6 +55,7 @@ import {
   readBashInput,
   splitBashOutput,
 } from "./bash-render"
+import { prettifyPastedImageRefs } from "./composer/image-paste"
 import {
   COMMAND_ARGS_TAG,
   COMMAND_NAME_TAG,
@@ -220,7 +221,11 @@ function UserRow(props: { text: string }) {
     if (stdout || stderr) {
       return { kind: "command-output" as const, stdout: stdout?.trim() ?? "", stderr: stderr?.trim() ?? "" }
     }
-    return { kind: "plain" as const, text }
+    // Fold ` @<pastedImagesDir>/<uuid>.<ext> ` refs (what `expand` wrote
+    // to the engine prompt) back into `[Image #N]` for human eyes. The
+    // engine still sees the absolute path on submit and on history
+    // recall — this transform is render-only.
+    return { kind: "plain" as const, text: prettifyPastedImageRefs(text) }
   }
   const view = parsed()
   if (view.kind === "command") {

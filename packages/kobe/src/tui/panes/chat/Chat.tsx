@@ -666,7 +666,12 @@ export function Chat(props: ChatProps) {
       if (lastToolIndex() !== null) toggleExpandLastTool()
       return
     }
-    void send(undefined, mode)
+    // `trimmed` is the composer's post-expansion text — `[Image #N]`
+    // placeholders have already been rewritten to ` @/abs/path ` so
+    // claude's `-p` mention parser can attach the image. Falling back
+    // to `draft()` here would silently drop the attachments because
+    // the draft signal mirrors the literal textarea content.
+    void send(trimmed, mode)
   }
 
   return (
