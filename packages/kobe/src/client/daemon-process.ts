@@ -10,12 +10,18 @@ export async function connectOrStartDaemon(): Promise<KobeDaemonClient> {
   const client = new KobeDaemonClient(socketPath)
   if (await canConnect(client)) return client
 
-  const entry = resolveKobedEntry()
-  const child = spawn(process.execPath, [entry, "start"], {
-    detached: true,
-    stdio: "ignore",
-    env: process.env,
-  })
+  const { entry, runWithBun } = resolveKobedEntry()
+  const child = runWithBun
+    ? spawn(process.execPath, [entry, "start"], {
+        detached: true,
+        stdio: "ignore",
+        env: process.env,
+      })
+    : spawn(entry, ["start"], {
+        detached: true,
+        stdio: "ignore",
+        env: process.env,
+      })
   child.unref()
 
   const deadline = Date.now() + 5000
@@ -46,12 +52,39 @@ async function canConnect(client: KobeDaemonClient): Promise<boolean> {
   }
 }
 
-function resolveKobedEntry(): string {
+/**
+ * Where to find `kobed`, expressed as either a JS entry to feed back to
+ * `process.execPath` (the bun runtime) or a standalone executable to
+ * spawn directly.
+ *
+ * Three layouts are possible:
+ *  - dev: running from source via `bun src/cli/index.ts`. `import.meta.url`
+ *    points into `src/`, so we resolve the sibling `src/bin/kobed.ts`.
+ *  - npm package: running the bundled `dist/cli/index.js`. The sibling
+ *    `dist/bin/kobed.js` is what we want.
+ *  - standalone: running a `bun build --compile` binary.
+ *    `import.meta.url` lives inside the embedded VFS (`/$bunfs` on
+ *    posix, `B:\~BUN` on Windows), so neither source nor dist exist on
+ *    the user's filesystem. Spawn the sibling `kobed` executable next
+ *    to `process.execPath` instead.
+ */
+function resolveKobedEntry(): { entry: string; runWithBun: boolean } {
   const here = fileURLToPath(import.meta.url)
+  if (here.startsWith("/$bunfs") || here.startsWith("B:\\~BUN")) {
+    const exeDir = dirname(process.execPath)
+    const ext = process.platform === "win32" ? ".exe" : ""
+    const sibling = join(exeDir, `kobed${ext}`)
+    if (!existsSync(sibling)) {
+      throw new Error(
+        `kobe: standalone build expected sibling kobed binary at ${sibling}; extract the full release tarball.`,
+      )
+    }
+    return { entry: sibling, runWithBun: false }
+  }
   const dir = dirname(here)
   const sourceEntry = resolve(dir, "../bin/kobed.ts")
-  if (existsSync(sourceEntry)) return sourceEntry
+  if (existsSync(sourceEntry)) return { entry: sourceEntry, runWithBun: true }
   const distEntry = join(dirname(process.argv[1] ?? here), "bin", "kobed.js")
-  if (existsSync(distEntry)) return distEntry
-  return join(process.cwd(), "dist", "bin", "kobed.js")
+  if (existsSync(distEntry)) return { entry: distEntry, runWithBun: true }
+  return { entry: join(process.cwd(), "dist", "bin", "kobed.js"), runWithBun: true }
 }
