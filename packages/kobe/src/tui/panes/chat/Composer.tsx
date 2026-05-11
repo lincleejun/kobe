@@ -67,6 +67,7 @@ import { type Accessor, For, Show, createEffect, createMemo, createSignal, on, o
 import type { PermissionMode } from "../../../types/engine"
 import { EmptyBorder, SplitBorder } from "../../component/border"
 import type { SlashEntry } from "../../context/command-palette"
+import { useFocus } from "../../context/focus"
 import { useTheme } from "../../context/theme"
 import { clipboardImageSupported } from "./composer/clipboard-image"
 import { getHistory, pushHistory } from "./composer/history"
@@ -202,6 +203,7 @@ function resolvePlaceholder(opts: { isStreaming: boolean; hasTask: boolean; noTa
 
 export function Composer(props: ComposerProps) {
   const { theme } = useTheme()
+  const focusCtx = useFocus()
 
   // Imperative ref to the textarea renderable. Set via the `ref` prop
   // callback once opentui mounts the node. We need imperative access
@@ -280,7 +282,15 @@ export function Composer(props: ComposerProps) {
   // this, Tab-ing into the workspace highlights the rail but keystrokes
   // still go to whichever pane previously held opentui focus, and
   // Tab-ing away leaves the textarea greedily eating keys it shouldn't.
+  //
+  // Also tracks `focusCtx.refocusTick` so that a same-pane setFocused
+  // call (re-clicking the workspace, switching chat tabs while
+  // workspace was already focused) re-asserts native focus on the
+  // textarea — without this, a click on a MessageList box or tab chip
+  // can steal opentui focus and leave the composer silently deaf to
+  // keystrokes even though the workspace pane is "focused".
   createEffect(() => {
+    focusCtx.refocusTick()
     const ref = textareaRef
     if (!ref) return
     if (props.focused?.()) ref.focus()
