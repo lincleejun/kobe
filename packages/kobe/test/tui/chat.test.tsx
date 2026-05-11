@@ -174,6 +174,47 @@ describe("setMessagesFromHistory", () => {
     expect(s.messages[2]).toEqual({ kind: "user", text: "how are you", ts: "2026-05-09T00:00:02Z" })
   })
 
+  test("rehydrates lastUsage from the latest persisted usage record", () => {
+    const past: Message[] = [
+      {
+        role: "assistant",
+        content: "old turn",
+        timestamp: "2026-05-09T00:00:00Z",
+        sessionId: "s",
+        usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 100 },
+      },
+      {
+        role: "assistant",
+        content: "newer turn",
+        timestamp: "2026-05-09T00:00:05Z",
+        sessionId: "s",
+        usage: {
+          input_tokens: 6,
+          output_tokens: 259,
+          cache_creation_input_tokens: 2169,
+          cache_read_input_tokens: 66900,
+        },
+      },
+      { role: "user", content: "after", timestamp: "2026-05-09T00:00:06Z", sessionId: "s" },
+    ]
+    const s = setMessagesFromHistory(createInitialState(), past)
+    expect(s.lastUsage).toEqual({
+      input_tokens: 6,
+      output_tokens: 259,
+      cache_creation_input_tokens: 2169,
+      cache_read_input_tokens: 66900,
+    })
+  })
+
+  test("leaves lastUsage undefined when no historical record carries usage", () => {
+    const past: Message[] = [
+      { role: "user", content: "hi", timestamp: "2026-05-09T00:00:00Z", sessionId: "s" },
+      { role: "assistant", content: "ok", timestamp: "2026-05-09T00:00:01Z", sessionId: "s" },
+    ]
+    const s = setMessagesFromHistory(createInitialState(), past)
+    expect(s.lastUsage).toBeUndefined()
+  })
+
   test("extracts text blocks from array-shaped content", () => {
     const past: Message[] = [
       {

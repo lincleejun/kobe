@@ -92,6 +92,19 @@ export interface Message {
   readonly content: unknown
   readonly timestamp: string
   readonly sessionId: string
+  /**
+   * Anthropic token usage for this assistant turn, when persisted on disk.
+   * Claude Code stores it inline on each assistant record's `message.usage`.
+   * Surfaced so the chat pane can repopulate the "context used" meter on
+   * history hydration (otherwise the meter is blank until the next turn
+   * runs and the engine emits a live `usage` EngineEvent).
+   */
+  readonly usage?: {
+    readonly input_tokens: number
+    readonly output_tokens: number
+    readonly cache_read_input_tokens?: number
+    readonly cache_creation_input_tokens?: number
+  }
 }
 
 /**

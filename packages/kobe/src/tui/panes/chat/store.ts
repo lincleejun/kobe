@@ -314,9 +314,26 @@ export function setMessagesFromHistory(state: ChatState, past: readonly Message[
     appendRowsFromMessage(rows, toolIndexById, m)
   }
 
+  // Rehydrate the context meter from the latest persisted usage record,
+  // so the workspace header shows last-turn usage on tab open instead of
+  // sitting blank until the user sends a new prompt. Claude Code stores
+  // `usage` on each assistant record's `message.usage` block.
+  let latestUsage: ChatState["lastUsage"]
+  for (let i = past.length - 1; i >= 0; i--) {
+    const u = past[i]?.usage
+    if (u) {
+      latestUsage = u
+      break
+    }
+  }
+
   // Apply the cap on the hydration path too — don't load 5000
   // historical rows just to drop 4000 immediately on the next delta.
-  return { ...state, messages: capMessages(rows, new Date().toISOString()) }
+  return {
+    ...state,
+    messages: capMessages(rows, new Date().toISOString()),
+    ...(latestUsage ? { lastUsage: latestUsage } : {}),
+  }
 }
 
 /** Append a freshly-submitted user prompt. Sets `isStreaming: true`. */

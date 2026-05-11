@@ -205,7 +205,23 @@ function extractMessage(record: Record<string, unknown>, fallbackSessionId: stri
   const ts = typeof record.timestamp === "string" ? (record.timestamp as string) : new Date().toISOString()
   const sid = typeof record.sessionId === "string" ? (record.sessionId as string) : fallbackSessionId
 
-  return { role, content, timestamp: ts, sessionId: sid }
+  const usage = extractUsage(inner.usage)
+  return usage ? { role, content, timestamp: ts, sessionId: sid, usage } : { role, content, timestamp: ts, sessionId: sid }
+}
+
+function extractUsage(v: unknown): Message["usage"] {
+  if (!isObject(v)) return undefined
+  const inTok = typeof v.input_tokens === "number" ? v.input_tokens : undefined
+  const outTok = typeof v.output_tokens === "number" ? v.output_tokens : undefined
+  if (inTok === undefined || outTok === undefined) return undefined
+  const cacheRead = typeof v.cache_read_input_tokens === "number" ? v.cache_read_input_tokens : undefined
+  const cacheCreate = typeof v.cache_creation_input_tokens === "number" ? v.cache_creation_input_tokens : undefined
+  return {
+    input_tokens: inTok,
+    output_tokens: outTok,
+    ...(cacheRead !== undefined ? { cache_read_input_tokens: cacheRead } : {}),
+    ...(cacheCreate !== undefined ? { cache_creation_input_tokens: cacheCreate } : {}),
+  }
 }
 
 function isObject(v: unknown): v is Record<string, unknown> {
