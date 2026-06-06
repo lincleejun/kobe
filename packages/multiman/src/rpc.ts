@@ -1,6 +1,6 @@
 // src/rpc.ts
-import type { MultimanKernel } from "@/kernel"
-import type { RoleKind, TaskStatus } from "@/types"
+import type { MultimanKernel } from "./kernel"
+import type { RoleKind, TaskStatus } from "./types"
 
 type Params = Record<string, unknown>
 

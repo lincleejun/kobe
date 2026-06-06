@@ -1,9 +1,9 @@
 // src/kernel.ts
-import type { Dao } from "@/db/dao"
-import type { Dag, DagEdge, Role, RoleKind, Task, TaskStatus } from "@/types"
-import { assertTransition } from "@/state-machine"
-import { hasCycle } from "@/dag"
-import { CyclicDagError, GuardError } from "@/errors"
+import type { Dao } from "./db/dao"
+import type { Dag, DagEdge, Role, RoleKind, Task, TaskStatus } from "./types"
+import { assertTransition } from "./state-machine"
+import { hasCycle } from "./dag"
+import { CyclicDagError, GuardError } from "./errors"
 
 export interface KobeOrchestratorPort {
   adoptWorktree(input: {

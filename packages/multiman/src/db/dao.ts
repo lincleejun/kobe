@@ -1,6 +1,6 @@
 // src/db/dao.ts
 import type { Database, SQLQueryBindings } from "bun:sqlite"
-import type { Role, RoleKind, Task, TaskStatus, Dag, EventLogRow } from "@/types"
+import type { Role, RoleKind, Task, TaskStatus, Dag, EventLogRow } from "../types"
 
 type Clock = () => string
 type IdGen = () => string

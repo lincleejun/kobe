@@ -1,4 +1,4 @@
-import type { MultimanKernel } from "@/kernel"
+import type { MultimanKernel } from "./kernel"
 
 export function startSweeper(kernel: MultimanKernel, opts: { intervalMs?: number } = {}): () => void {
   const intervalMs = opts.intervalMs ?? 30_000

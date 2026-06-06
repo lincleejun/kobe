@@ -1,4 +1,7 @@
--- role：执行单元（orchestrator / worker / collector）
+// src/db/migrations/001_init.ts
+// Authoritative migration SQL embedded as a TS module so it survives bundling
+// in consumers (e.g. kobe's dist) — readFileSync(import.meta.url) breaks there.
+export const INIT_SQL = `-- role：执行单元（orchestrator / worker / collector）
 CREATE TABLE role (
   id            TEXT PRIMARY KEY,
   name          TEXT NOT NULL UNIQUE,
@@ -141,3 +144,4 @@ CREATE TABLE event_log (
   ts          TEXT NOT NULL
 );
 CREATE INDEX idx_event_target ON event_log(target_kind, target_id);
+`

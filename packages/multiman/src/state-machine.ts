@@ -1,7 +1,7 @@
 // src/state-machine.ts
-import type { TaskStatus } from "@/types"
-import { TERMINAL_STATUSES } from "@/types"
-import { InvalidTransitionError } from "@/errors"
+import type { TaskStatus } from "./types"
+import { TERMINAL_STATUSES } from "./types"
+import { InvalidTransitionError } from "./errors"
 
 // Shape-legality only. DB-dependent guards (role active, deps satisfied, claim
 // uniqueness) live in kernel.ts. This file stays pure for exhaustive unit tests.
