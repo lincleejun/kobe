@@ -648,3 +648,23 @@ S0 下只有一个写者，安全；但若将来有人加第二个写 DB 的进�
 - 未决问题：无（D1 + Finding1/2 + codex #1~#4b 均已拍板）
 - 注：codex #4b 推翻了内部评审 Note B（单 channel「S0 够用」的判断），已改为 bus 仅提示 + 轮询兜底
 ```
+
+---
+
+## 13. case.md 故事演练（2026-06-05）
+
+用 S0 kernel 实跑 `case.md` 的 5 步故事，验证数据模型能否承载跨角色数据流。
+
+**已修 bug：** `task` 缺 MR 引用 → 评审 comment 无法回链原始 coding task。
+加 `task.mr_url TEXT` + `idx_task_mr`（commit `e1e0d9b`）。回链键：comment 知道自己的 MR，
+不知道 coding session，故 MR 必须可查。`session_id` 作为辅助回链键本就存在。
+
+**演练通过的回链字段（回答 case.md 的"输出 schema 被消费"问题）：**
+- kobe-tui 完成→提交 MR：task 记 `mr_url` + `session_id`。
+- cronjob→inbox：`inbox_item.payload`(JSON) 带 `mr_url`/`commenter`/`comments[]`/`origin_mr_url`/`origin_session_id`。
+- orchestrator→修复任务：`parent_task_id`（原 task）+ `source_ref`（来源 inbox_item）；inbox 标 `processed`+`consumed_by`。
+
+**确认 deferred（非 bug）：**
+- inbox 投递 API（kernel/dao CRUD）—— D1 决议推迟到子系统 2。payload 可承载结构化数据，数据模型够用。
+- 『待人工派发』表示（第5步 askuserquestion 等派发）—— 留给子系统 3 与派发流程一起设计；
+  现状用 `pending`+未指派可表达但无法与普通 pending 区分。known gap。
