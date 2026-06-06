@@ -4,5 +4,14 @@
     "baseUrl": ".",
     "paths": { "@/*": ["./src/*"] }
   },
-  "include": ["src", "test"]
+  "include": ["src", "test"],
+  // The daemon socket integration test deep-imports kobe's `src/*.ts` (no
+  // exports map) to start a real in-process daemon. Those modules use kobe's
+  // OWN `@/`/`@orchestrator/` path aliases + `customConditions`, which only
+  // resolve under kobe's tsconfig — pulling them into multiman's tsc graph
+  // surfaces spurious "cannot find module" errors for kobe internals. The
+  // test is env-gated (KOBE_INCLUDE_SOCKET=1) and transpile-checked by bun at
+  // runtime, so exclude it from multiman's standalone typecheck (kobe's own
+  // typecheck covers those modules).
+  "exclude": ["test/daemon.socket.test.ts"]
 }
