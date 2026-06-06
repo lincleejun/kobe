@@ -1,5 +1,5 @@
 // src/db/dao.ts
-import type { Database } from "bun:sqlite"
+import type { Database, SQLQueryBindings } from "bun:sqlite"
 import type { Role, RoleKind, Task, TaskStatus, Dag, EventLogRow } from "@/types"
 
 type Clock = () => string
@@ -49,7 +49,7 @@ export class Dao {
     return this.db.query("SELECT * FROM task WHERE id=?").get(id) as Task | undefined
   }
   listTasks(f: { status?: TaskStatus; role_id?: string; dag_id?: string } = {}): Task[] {
-    const where: string[] = [], args: unknown[] = []
+    const where: string[] = [], args: SQLQueryBindings[] = []
     if (f.status) { where.push("status=?"); args.push(f.status) }
     if (f.role_id) { where.push("role_id=?"); args.push(f.role_id) }
     if (f.dag_id) { where.push("dag_id=?"); args.push(f.dag_id) }
@@ -60,7 +60,7 @@ export class Dao {
     const cols = Object.keys(patch)
     if (cols.length === 0) return this.getTask(id)!
     const set = cols.map((c) => `${c}=?`).join(", ")
-    const args = cols.map((c) => (patch as Record<string, unknown>)[c])
+    const args = cols.map((c) => (patch as Record<string, unknown>)[c]) as SQLQueryBindings[]
     this.db.query(`UPDATE task SET ${set}, updated_at=? WHERE id=?`).run(...args, this.now(), id)
     return this.getTask(id)!
   }

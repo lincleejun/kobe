@@ -8,7 +8,7 @@ function checkValues(ddl: string, column: string): string[] {
   const re = new RegExp(`${column}[\\s\\S]*?CHECK\\s*\\(\\s*${column}\\s+IN\\s*\\(([^)]*)\\)`, "i")
   const m = ddl.match(re)
   if (!m) throw new Error(`no CHECK found for ${column}`)
-  return m[1].split(",").map((s) => s.trim().replace(/^'|'$/g, "")).sort()
+  return m[1]!.split(",").map((s) => s.trim().replace(/^'|'$/g, "")).sort()
 }
 
 describe("enum sync: TS arrays match SQL CHECK", () => {
