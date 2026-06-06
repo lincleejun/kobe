@@ -334,6 +334,13 @@ async function main(): Promise<void> {
     await runDaemonSubcommand(rest)
     return
   }
+  if (subcommand === "multiman") {
+    // Thin client over the multiman kernel: tunnels one JSON-RPC call to the
+    // in-process kernel via the daemon's `multiman` passthrough request.
+    const { runMultimanSubcommand } = await import("./multiman-cmd.ts")
+    await runMultimanSubcommand(rest)
+    return
+  }
   if (subcommand === "doctor") {
     const { runDoctorSubcommand } = await import("./maintenance.ts")
     await runDoctorSubcommand(rest)

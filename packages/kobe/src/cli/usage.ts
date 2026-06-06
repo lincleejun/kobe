@@ -23,6 +23,7 @@ export function topLevelUsage(): string {
     "  repo <verb>             Per-repo init script + first prompt (show|set|unset)",
     "  api <verb>              Scriptable RPC surface for agents (see `kobe api --help`)",
     "  daemon <verb>           Manage the daemon (start|stop|status|restart)",
+    "  multiman <noun> <verb>  Drive the multiman kernel (role|task; see `kobe multiman --help`)",
     "  theme <verb>            Manage user themes (list|add|remove)",
     "  skill <verb>            Install the kobe agent skill (install|status|command)",
     "  update [target]         Self-update kobe",
