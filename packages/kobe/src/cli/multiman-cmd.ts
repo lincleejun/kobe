@@ -60,6 +60,7 @@ const MULTIMAN_USAGE = [
   "  schedule list [--enabled]",
   "  schedule enable <id> --enabled <true|false>",
   "  schedule run-now <id>",
+  "  status [--watch] [--interval <ms>]   (live dashboard of roles/tasks/inbox/DAGs)",
   "  runner --role <id> [--timeout-ms <n>]   (long-running autonomous role-runner)",
   "  orchestrator --role <id> [--timeout-ms <n>]   (long-running inbox->DAG decomposer)",
   "",
@@ -378,6 +379,15 @@ export async function runMultimanSubcommand(argv: readonly string[]): Promise<vo
   if (noun === "orchestrator") {
     const { runMultimanOrchestrator } = await import("./multiman-orchestrator-cmd.ts")
     await runMultimanOrchestrator(verb === undefined ? rest : [verb, ...rest])
+    return
+  }
+
+  // `status` renders a live dashboard. In `--watch` mode it holds its own
+  // persistent client + subscription, so (like runner/orchestrator) it bypasses
+  // the thin request/emit/close path below.
+  if (noun === "status") {
+    const { runMultimanStatus } = await import("./multiman-status-cmd.ts")
+    await runMultimanStatus(verb === undefined ? rest : [verb, ...rest])
     return
   }
 
