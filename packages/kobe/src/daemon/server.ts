@@ -16,7 +16,6 @@ import { mkdir, readFile, unlink, writeFile } from "node:fs/promises"
 import { type Server, type Socket, createServer } from "node:net"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
-import { Dao, MultimanKernel, makeRpcHandler, openDb, runMigrations, startSweeper } from "@sma1lboy/multiman"
 import {
   type EngineActivityDetail,
   type EngineActivityKind,
@@ -204,6 +203,10 @@ export async function startDaemonServer(orch: Orchestrator, options: DaemonServe
   // dir isn't created until the socket/pid `mkdir`s below, and bun:sqlite's
   // `create: true` only creates the FILE, not its parent dir (else SQLITE_CANTOPEN).
   await mkdir(dirname(mmDbPath), { recursive: true })
+  // Dynamic import so multiman's `bun:sqlite` dependency stays OUT of kobe's
+  // static module graph — keeps vitest (node) able to LOAD this file.
+  const { openDb, runMigrations, Dao, MultimanKernel, makeRpcHandler, startSweeper } =
+    await import("@sma1lboy/multiman")
   const mmDb = openDb(mmDbPath)
   runMigrations(mmDb)
   const mmDao = new Dao(

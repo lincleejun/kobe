@@ -13,13 +13,7 @@
     "allowImportingTsExtensions": true,
     "noEmit": true,
     "paths": {
-      // The first candidate is kobe's own src; the second is a fallback so
-      // tsc can resolve the `@sma1lboy/multiman` package's INTERNAL `@/`
-      // aliases when it follows that workspace dep's .ts source (the daemon
-      // mounts the multiman kernel — see daemon/server.ts). kobe's own
-      // `@/<file>` always resolves via `./src/<file>` first; the multiman
-      // fallback only fires for files that don't exist under kobe's src.
-      "@/*": ["./src/*", "../multiman/src/*"],
+      "@/*": ["./src/*"],
       "@tui/*": ["./src/tui/*"],
       "@engine/*": ["./src/engine/*"],
       "@orchestrator/*": ["./src/orchestrator/*"],
