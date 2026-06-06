@@ -34,6 +34,7 @@
  */
 
 import { existsSync } from "node:fs"
+import { kobeCliInvocation } from "@/cli/invocation"
 import {
   currentSessionName,
   getSessionOption,
@@ -43,6 +44,7 @@ import {
   switchClientBeforeKill,
   tmuxSessionName,
 } from "@/tmux/client"
+import { shellQuote, shellQuoteArgv } from "@/tmux/session-layout"
 import { TextAttributes } from "@opentui/core"
 import { render, useTerminalDimensions } from "@opentui/solid"
 import { type Accessor, For, Show, createEffect, createMemo, createSignal, onMount } from "solid-js"
@@ -83,6 +85,42 @@ import { DialogConfirm } from "../ui/dialog-confirm"
 
 const FALLBACK_THEME = "claude"
 const RELOAD_MS = 1500
+
+/**
+ * Synthetic id for the "multiman board" entry pinned as the FIRST row of the
+ * Tasks pane's Sidebar. Not a task id — the Sidebar routes it through
+ * `onActivateAction` (see {@link openBoard}) instead of the task-switch path.
+ */
+const BOARD_ACTION_ID = "action:board"
+
+/**
+ * Launch the standalone multiman board (`kobe multiman board`) from inside the
+ * Tasks pane's tmux session. Built from kobe's self-invocation argv so the
+ * board runs with the SAME runtime as this pane (the dev `bun --preload …` line
+ * in source, or the `kobe` bin in a packaged build) and the SAME KOBE_HOME_DIR.
+ *
+ * Surface: a `display-popup -E` overlay that runs the board and closes on exit.
+ * If display-popup isn't available (tmux < 3.2), falls back to a `new-window`
+ * named `board` that closes when the board quits. Both run on kobe's own
+ * `-L kobe` socket via {@link runTmux}, so the popup/window lands in this
+ * session, not the user's tmux.
+ */
+async function openBoard(): Promise<void> {
+  const inv = kobeCliInvocation()
+  const argv = [...inv, "multiman", "board"]
+  // Propagate KOBE_HOME_DIR so the board reads the SAME environment's tasks as
+  // this pane (tmux-server env inheritance goes stale across restarts — KOB-244).
+  const homeDirEnv = process.env.KOBE_HOME_DIR
+  const envPrefix = homeDirEnv && homeDirEnv.length > 0 ? `KOBE_HOME_DIR=${shellQuote(homeDirEnv)} ` : ""
+  const cmd = `${envPrefix}${shellQuoteArgv(argv)}`
+  // Prefer an overlay popup (runs the board, closes on exit). `-E` closes the
+  // popup when the command finishes; `-w`/`-h` size it. Fall back to a window
+  // if display-popup is unsupported (old tmux) or errors.
+  const popupCode = await runTmux(["display-popup", "-E", "-w", "90%", "-h", "85%", cmd])
+  if (popupCode !== 0) {
+    await runTmux(["new-window", "-n", "board", cmd])
+  }
+}
 
 function TasksShell(props: {
   tasks: Accessor<readonly Task[]>
@@ -603,6 +641,12 @@ function TasksShell(props: {
           selectedId={selectedId}
           onSelect={setSelectedId}
           onActivate={(id) => void switchTo(id)}
+          // Pin the multiman board as the FIRST list item; Enter / click opens
+          // the standalone board overlay (see openBoard) instead of a task.
+          topActions={() => [{ id: BOARD_ACTION_ID, label: "multiman board", glyph: "◳" }]}
+          onActivateAction={(id) => {
+            if (id === BOARD_ACTION_ID) void openBoard()
+          }}
           activateOnClick
           // Brand-header version/update chip (replaces the footer system block).
           headerStatus={headerStatus}

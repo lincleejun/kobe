@@ -107,6 +107,21 @@ export type SidebarProps = {
    */
   onActivate?: (taskId: string) => void
   /**
+   * Optional synthetic "action" rows pinned to the TOP of the list, above
+   * PROJECTS/TASKS. Each is a selectable row (glyph + label) that participates
+   * in the j/k cursor and Enter activation exactly like a task row — they come
+   * FIRST in the cursor order. Activating one (Enter, or click) calls
+   * {@link onActivateAction} with the action's `id` instead of selecting a
+   * task. Omitted by app.tsx, so its sidebar is unchanged.
+   */
+  topActions?: Accessor<readonly { id: string; label: string; glyph?: string }[]>
+  /**
+   * Fires when a {@link topActions} row is activated (Enter, or click when
+   * {@link activateOnClick}). Receives the action's `id`. Distinct from
+   * {@link onActivate} so an action never flows through the task-select path.
+   */
+  onActivateAction?: (actionId: string) => void
+  /**
    * When true, a mouse click on a row fires {@link onActivate} (not
    * just {@link onSelect}). Off in the outer app — there activate is a
    * **Handover** that suspends the renderer, so a stray click must not
@@ -459,7 +474,14 @@ export function Sidebar(props: SidebarProps) {
   // changes. Search query is only applied when `searchMode` is on so
   // we don't keep filtering against stale query text after esc-cancel.
   const rows = createMemo(() => buildRows(props.tasks(), view(), searchMode() ? searchQuery() : ""))
-  const flatIds = createMemo(() => flattenIds(rows()))
+  // Synthetic "action" rows pinned above the list (e.g. the multiman board
+  // entry). Opt-in via `topActions`; empty for app.tsx so its sidebar is
+  // unchanged. They take the FIRST cursor slots: `flatIds` prepends their ids
+  // and every task row's effective flatIndex is shifted by `actionCount` so
+  // j/k + Enter treat the actions as items 0..n-1, then the tasks.
+  const actions = createMemo(() => props.topActions?.() ?? [])
+  const actionCount = createMemo(() => actions().length)
+  const flatIds = createMemo(() => [...actions().map((a) => a.id), ...flattenIds(rows())])
   // The list is two sections: PROJECTS (the `main` repo-root rows, which
   // `buildRows` always emits first) then all TASKS (worktrees) flat — NOT
   // grouped per project (Jackson's call). `firstTaskFlatIndex` is the
@@ -469,7 +491,7 @@ export function Sidebar(props: SidebarProps) {
   const firstTaskFlatIndex = createMemo(() => {
     const r = rows()
     const idx = r.findIndex((row) => row.task.kind !== "main")
-    return idx < 0 ? -1 : r[idx]!.flatIndex
+    return idx < 0 ? -1 : r[idx]!.flatIndex + actionCount()
   })
   // Total unfiltered count for the active view — used to show "N/total" in search mode.
   const totalRows = createMemo(() => flattenIds(buildRows(props.tasks(), view(), "")).length)
@@ -578,11 +600,18 @@ export function Sidebar(props: SidebarProps) {
     setCursorIndex,
     flatTaskIds: flatIds,
     onSelect: (id) => {
-      // Keyboard `enter` path. Always sync the highlight, and — if
-      // the host wired `onActivate` — fire it too so a single Enter
-      // opens the task (e.g. attaches to its tmux session). Mouse
-      // clicks still go through `props.onSelect` only via the
-      // per-row `onMouseUp`, so a stray click never auto-launches.
+      // Keyboard `enter` path. A synthetic action id (from `topActions`)
+      // routes to `onActivateAction` and NEVER touches the task-select path
+      // — selecting it must not move the task highlight or attach a session.
+      if (actions().some((a) => a.id === id)) {
+        props.onActivateAction?.(id)
+        return
+      }
+      // Otherwise the normal task path: sync the highlight, and — if the
+      // host wired `onActivate` — fire it too so a single Enter opens the
+      // task (e.g. attaches to its tmux session). Mouse clicks still go
+      // through `props.onSelect` only via the per-row `onMouseUp`, so a
+      // stray click never auto-launches.
       props.onSelect(id)
       props.onActivate?.(id)
     },
@@ -735,10 +764,52 @@ export function Sidebar(props: SidebarProps) {
             switcher up top, TASK cards each carry a trailing blank line so they
             read as separate cards, and a divider splits the two sections. */}
         <box flexShrink={0} gap={0} paddingRight={1}>
+          {/* Synthetic action rows pinned to the top (e.g. the multiman board
+              entry). Each is a single selectable line — accent edge + glyph +
+              label — sharing the task-row cursor styling. Its cursor index is
+              its position in `actions()` (0..n-1), so j/k + Enter treat it as
+              the first item(s) above PROJECTS/TASKS. */}
+          <For each={actions()}>
+            {(action, i) => {
+              const flatIndex = i()
+              const isCursor = () => flatIndex === cursorIndex()
+              const activate = (): void => props.onActivateAction?.(action.id)
+              return (
+                <box
+                  flexDirection="row"
+                  gap={0}
+                  paddingBottom={1}
+                  backgroundColor={isCursor() ? theme.backgroundElement : undefined}
+                  onMouseUp={() => {
+                    if (props.activateOnClick) activate()
+                  }}
+                >
+                  <text fg={isCursor() ? theme.focusAccent : undefined} wrapMode="none">
+                    {isCursor() ? "▌" : " "}
+                  </text>
+                  <box flexDirection="row" flexGrow={1} paddingRight={1} gap={0}>
+                    <text fg={theme.primary} attributes={TextAttributes.BOLD} wrapMode="none">
+                      {action.glyph ?? "◳"}
+                    </text>
+                    <text
+                      fg={theme.text}
+                      attributes={isCursor() ? TextAttributes.BOLD : undefined}
+                      wrapMode="none"
+                      flexGrow={1}
+                    >
+                      {spacedTitle(action.label, titleBudget())}
+                    </text>
+                  </box>
+                </box>
+              )
+            }}
+          </For>
           <For each={rows()}>
             {(row) => {
               const task = row.task
-              const flatIndex = row.flatIndex
+              // Shift task flatIndex past the synthetic action rows so the
+              // cursor lines up: actions occupy 0..actionCount-1.
+              const flatIndex = row.flatIndex + actionCount()
               const isCursor = () => flatIndex === cursorIndex()
               const isSelected = () => task.id === props.selectedId()
               const isMain = task.kind === "main"
@@ -853,7 +924,7 @@ export function Sidebar(props: SidebarProps) {
               // grouping): PROJECTS above the first row when it's a project,
               // TASKS above the first non-main row. `topPad` lifts the TASKS
               // header off the tight project list only when projects exist.
-              const showProjectsHeader = () => isMain && flatIndex === 0
+              const showProjectsHeader = () => isMain && flatIndex === actionCount()
               const showTasksHeader = () => !isMain && flatIndex === firstTaskFlatIndex()
               return (
                 <box flexDirection="column" gap={0} paddingBottom={isMain ? 0 : 1}>
