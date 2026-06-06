@@ -205,8 +205,9 @@ export async function startDaemonServer(orch: Orchestrator, options: DaemonServe
   await mkdir(dirname(mmDbPath), { recursive: true })
   // Dynamic import so multiman's `bun:sqlite` dependency stays OUT of kobe's
   // static module graph — keeps vitest (node) able to LOAD this file.
-  const { openDb, runMigrations, Dao, MultimanKernel, makeRpcHandler, startSweeper } =
-    await import("@sma1lboy/multiman")
+  const { openDb, runMigrations, Dao, MultimanKernel, makeRpcHandler, startSweeper } = await import(
+    "@sma1lboy/multiman"
+  )
   const mmDb = openDb(mmDbPath)
   runMigrations(mmDb)
   const mmDao = new Dao(
