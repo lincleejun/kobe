@@ -61,6 +61,7 @@ const MULTIMAN_USAGE = [
   "  schedule enable <id> --enabled <true|false>",
   "  schedule run-now <id>",
   "  status [--watch] [--interval <ms>]   (live dashboard of roles/tasks/inbox/DAGs)",
+  "  board   (standalone fullscreen kanban board of multiman tasks)",
   "  runner --role <id> [--timeout-ms <n>]   (long-running autonomous role-runner)",
   "  orchestrator --role <id> [--timeout-ms <n>]   (long-running inbox->DAG decomposer)",
   "",
@@ -388,6 +389,16 @@ export async function runMultimanSubcommand(argv: readonly string[]): Promise<vo
   if (noun === "status") {
     const { runMultimanStatus } = await import("./multiman-status-cmd.ts")
     await runMultimanStatus(verb === undefined ? rest : [verb, ...rest])
+    return
+  }
+
+  // `board` is a long-running fullscreen opentui TUI (the standalone multiman
+  // kanban view), not a one-shot RPC — like runner/orchestrator/status it owns
+  // its own daemon lifetime + subscription, so it bypasses the thin
+  // request/emit/close path below.
+  if (noun === "board") {
+    const { startMultimanBoard } = await import("../tui/multiman-board/host.tsx")
+    await startMultimanBoard()
     return
   }
 
