@@ -5,7 +5,20 @@ import type { Dao } from "./db/dao"
 import type { CreateAssetInput, CreateInboxItemInput, CreateScheduleInput } from "./db/dao"
 import { CyclicDagError, GuardError } from "./errors"
 import { assertTransition } from "./state-machine"
-import type { Asset, Dag, DagEdge, InboxItem, InboxStatus, Role, RoleKind, Schedule, Task, TaskStatus } from "./types"
+import type {
+  Asset,
+  Comment,
+  CommentAuthorKind,
+  Dag,
+  DagEdge,
+  InboxItem,
+  InboxStatus,
+  Role,
+  RoleKind,
+  Schedule,
+  Task,
+  TaskStatus,
+} from "./types"
 
 export interface KobeOrchestratorPort {
   adoptWorktree(input: {
@@ -67,6 +80,53 @@ export class MultimanKernel {
   }
   listTasks(f?: Parameters<Dao["listTasks"]>[0]): Task[] {
     return this.dao.listTasks(f)
+  }
+
+  // Edit user-editable task fields (S6 console). STATUS IS NOT EDITABLE here —
+  // status changes go exclusively through transition(). Only title/body/priority/
+  // role_id are applied; roleId === null unassigns. `roleId` undefined leaves the
+  // assignment untouched.
+  editTask(id: string, patch: { title?: string; body?: string; priority?: number; roleId?: string | null }): Task {
+    const t = this.dao.getTask(id)
+    if (!t) throw new GuardError(`task not found: ${id}`)
+    const set: Partial<Task> = {}
+    if (patch.title !== undefined) set.title = patch.title
+    if (patch.body !== undefined) set.body = patch.body
+    if (patch.priority !== undefined) set.priority = patch.priority
+    if (patch.roleId !== undefined) {
+      if (patch.roleId !== null && !this.dao.getRole(patch.roleId)) {
+        throw new GuardError(`role not found: ${patch.roleId}`)
+      }
+      set.role_id = patch.roleId
+    }
+    if (Object.keys(set).length === 0) throw new GuardError("editTask requires at least one editable field")
+    const updated = this.dao.updateTask(id, set)
+    this.dao.logEvent({
+      actor_kind: "human",
+      actor_id: null,
+      action: "task.update",
+      target_kind: "task",
+      target_id: id,
+      details: JSON.stringify(set),
+    })
+    this.publish("task.updated", updated)
+    return updated
+  }
+
+  // ---- comment pass-throughs (S6) ----
+  addComment(i: { taskId: string; body: string; authorKind?: CommentAuthorKind; authorId?: string | null }): Comment {
+    if (!this.dao.getTask(i.taskId)) throw new GuardError(`task not found: ${i.taskId}`)
+    const c = this.dao.addComment({
+      task_id: i.taskId,
+      author_kind: i.authorKind ?? "human",
+      author_id: i.authorId ?? null,
+      body: i.body,
+    })
+    this.publish("comment.added", c)
+    return c
+  }
+  listComments(taskId: string): Comment[] {
+    return this.dao.listComments(taskId)
   }
 
   // Thin pass-throughs for the RPC layer (rpc.ts must not reach into dao directly).

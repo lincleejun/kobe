@@ -2,6 +2,7 @@
 import type { MultimanKernel } from "./kernel"
 import type {
   AssetKind,
+  CommentAuthorKind,
   InboxSeverity,
   InboxStatus,
   RoleKind,
@@ -59,6 +60,20 @@ export function makeRpcHandler(kernel: MultimanKernel): RpcHandler {
       kernel.transition(reqStr(p, "id"), reqStr(p, "to") as TaskStatus, optStr(p, "reason") ?? "rpc", {
         roleId: optStr(p, "roleId"),
       }),
+    // task.update edits user-editable fields only; status changes go via task.transition.
+    "task.update": (p) => {
+      const patch: { title?: string; body?: string; priority?: number; roleId?: string | null } = {}
+      if (optStr(p, "title") !== undefined) patch.title = optStr(p, "title")
+      if (optStr(p, "body") !== undefined) patch.body = optStr(p, "body")
+      if (p.priority !== undefined && p.priority !== null) {
+        if (typeof p.priority !== "number") throw new Error("invalid param: priority")
+        patch.priority = p.priority
+      }
+      // roleId: a string reassigns; explicit null unassigns; absent leaves it.
+      if ("roleId" in p) patch.roleId = p.roleId === null ? null : reqStr(p, "roleId")
+      if (Object.keys(patch).length === 0) throw new Error("task.update requires at least one editable field")
+      return kernel.editTask(reqStr(p, "id"), patch)
+    },
     "task.claim": (p) => kernel.claimNextTask(reqStr(p, "roleId")),
     "task.report": (p) =>
       kernel.reportTask(reqStr(p, "id"), {
@@ -142,6 +157,15 @@ export function makeRpcHandler(kernel: MultimanKernel): RpcHandler {
     "asset.attach": (p) => kernel.attachAsset(reqStr(p, "roleId"), reqStr(p, "assetId")),
     "asset.detach": (p) => kernel.detachAsset(reqStr(p, "roleId"), reqStr(p, "assetId")),
     "role.assets": (p) => kernel.assetsForRole(reqStr(p, "roleId")),
+    // comment.* (S6 scope)
+    "comment.add": (p) =>
+      kernel.addComment({
+        taskId: reqStr(p, "taskId"),
+        body: reqStr(p, "body"),
+        authorKind: optStr(p, "authorKind") as CommentAuthorKind | undefined,
+        authorId: optStr(p, "authorId") ?? null,
+      }),
+    "comment.list": (p) => kernel.listComments(reqStr(p, "taskId")),
   }
   return async (method, params) => {
     const fn = routes[method]

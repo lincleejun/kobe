@@ -3,6 +3,8 @@ import type { Database, SQLQueryBindings } from "bun:sqlite"
 import type {
   Asset,
   AssetKind,
+  Comment,
+  CommentAuthorKind,
   Dag,
   EventLogRow,
   InboxItem,
@@ -67,6 +69,13 @@ export interface CreateAssetInput {
   version?: string
   spec?: string
   path?: string | null
+}
+
+export interface CreateCommentInput {
+  task_id: string
+  author_kind: CommentAuthorKind
+  author_id?: string | null
+  body: string
 }
 
 export class Dao {
@@ -341,6 +350,20 @@ export class Dao {
           ORDER BY a.created_at ASC`,
       )
       .all(roleId) as Asset[]
+  }
+
+  // ---- comment ----
+  addComment(i: CreateCommentInput): Comment {
+    const id = this.id()
+    this.db
+      .query("INSERT INTO comment (id,task_id,author_kind,author_id,body,created_at) VALUES (?,?,?,?,?,?)")
+      .run(id, i.task_id, i.author_kind, i.author_id ?? null, i.body, this.now())
+    return this.db.query("SELECT * FROM comment WHERE id=?").get(id) as Comment
+  }
+  listComments(taskId: string): Comment[] {
+    return this.db
+      .query("SELECT * FROM comment WHERE task_id=? ORDER BY created_at ASC, id ASC")
+      .all(taskId) as Comment[]
   }
 
   // ---- event log ----

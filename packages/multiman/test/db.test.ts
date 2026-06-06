@@ -15,11 +15,11 @@ describe("openDb", () => {
 })
 
 describe("runMigrations", () => {
-  it("applies 001 to an empty db and sets user_version=1", () => {
+  it("applies all migrations to an empty db and sets user_version=2", () => {
     const db = openDb(":memory:")
     runMigrations(db)
     const v = db.query("PRAGMA user_version").get() as { user_version: number }
-    expect(v.user_version).toBe(1)
+    expect(v.user_version).toBe(2)
     const tables = db.query("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all() as {
       name: string
     }[]
@@ -27,6 +27,7 @@ describe("runMigrations", () => {
     expect(names).toContain("task")
     expect(names).toContain("role")
     expect(names).toContain("event_log")
+    expect(names).toContain("comment")
     db.close()
   })
 
@@ -35,7 +36,7 @@ describe("runMigrations", () => {
     runMigrations(db)
     runMigrations(db) // must not throw "table already exists"
     const v = db.query("PRAGMA user_version").get() as { user_version: number }
-    expect(v.user_version).toBe(1)
+    expect(v.user_version).toBe(2)
     db.close()
   })
 })

@@ -1,11 +1,15 @@
 import type { Database } from "bun:sqlite"
 import { INIT_SQL } from "./migrations/001_init"
+import { COMMENT_SQL } from "./migrations/002_comment"
 
 interface Migration {
   version: number
   sql: string
 }
-const MIGRATIONS: Migration[] = [{ version: 1, sql: INIT_SQL }]
+const MIGRATIONS: Migration[] = [
+  { version: 1, sql: INIT_SQL },
+  { version: 2, sql: COMMENT_SQL },
+]
 
 export function runMigrations(db: Database): void {
   const cur = (db.query("PRAGMA user_version").get() as { user_version: number }).user_version

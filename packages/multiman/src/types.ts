@@ -49,6 +49,9 @@ export type ScheduleRunStatus = (typeof SCHEDULE_RUN_STATUSES)[number]
 export const ASSET_KINDS = ["skill", "mcp"] as const
 export type AssetKind = (typeof ASSET_KINDS)[number]
 
+export const COMMENT_AUTHOR_KINDS = ["human", "role", "system"] as const
+export type CommentAuthorKind = (typeof COMMENT_AUTHOR_KINDS)[number]
+
 export const TERMINAL_STATUSES: ReadonlySet<TaskStatus> = new Set(["done", "cancelled"])
 
 export interface Role {
@@ -150,6 +153,15 @@ export interface Asset {
   version: string
   spec: string
   path: string | null
+  created_at: string
+}
+
+export interface Comment {
+  id: string
+  task_id: string
+  author_kind: CommentAuthorKind
+  author_id: string | null
+  body: string
   created_at: string
 }
 
