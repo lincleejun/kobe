@@ -18,17 +18,15 @@
  * the board never mutates the kernel.
  */
 
-import { TextAttributes } from "@opentui/core"
 import { render } from "@opentui/solid"
-import type { Role as MultimanRole, Task as MultimanTask } from "@sma1lboy/multiman/types"
+import type { Comment as MultimanComment, Role as MultimanRole, Task as MultimanTask } from "@sma1lboy/multiman/types"
 import { type Accessor, createSignal, onMount } from "solid-js"
 import { connectOrStartDaemon } from "../../client/daemon-process.ts"
 import type { KobeDaemonClient } from "../../client/index.ts"
 import { ThemeProvider, addTheme, useTheme } from "../context/theme"
 import { loadUserThemes } from "../context/theme/loader"
-import { useBindings } from "../lib/keymap"
 import { readPersistedUiPrefs } from "../lib/persisted-ui-prefs"
-import { MultimanBoard } from "../panes/multiman-board/MultimanBoard"
+import { type BoardActions, InteractiveBoard } from "../panes/multiman-board/InteractiveBoard"
 
 const FALLBACK_THEME = "claude"
 /** Slow backstop poll: the `multiman` channel drives most refreshes; this just
@@ -85,6 +83,34 @@ export async function startMultimanBoard(): Promise<void> {
 
   await refresh()
 
+  // Mutating RPC surface handed to the interactive board. Each call is a thin
+  // wrapper over `client.request("multiman", …)`; they reject on a daemon error
+  // (e.g. an illegal `task.transition`) and the component catches + surfaces it.
+  const actions: BoardActions = {
+    listComments: async (taskId) => {
+      const res = await client.request("multiman", { method: "comment.list", params: { taskId } })
+      return Array.isArray(res) ? (res as MultimanComment[]) : []
+    },
+    transition: async (id, to) => {
+      await client.request("multiman", { method: "task.transition", params: { id, to } })
+    },
+    updateTask: async (id, patch) => {
+      await client.request("multiman", { method: "task.update", params: { id, ...patch } })
+    },
+    addComment: async (taskId, body) => {
+      await client.request("multiman", { method: "comment.add", params: { taskId, body } })
+    },
+    // Top-level chat → inbox so the orchestrator can consume it. `payload` is a
+    // JSON string (kernel stores it as text); severity "info".
+    pushChat: async (text) => {
+      await client.request("multiman", {
+        method: "inbox.push",
+        params: { source: "console", kind: "chat", payload: JSON.stringify({ text }), severity: "info" },
+      })
+    },
+    refresh,
+  }
+
   // Debounced refetch on every `multiman` kernel event.
   let debounce: ReturnType<typeof setTimeout> | undefined
   const unsubscribe = client.onChannel("multiman", () => {
@@ -101,7 +127,7 @@ export async function startMultimanBoard(): Promise<void> {
   await render(
     () => (
       <ThemeProvider mode="dark" theme={prefs.theme}>
-        <BoardShell tasks={tasksAcc} roles={rolesAcc} transparent={prefs.transparent} />
+        <BoardShell tasks={tasksAcc} roles={rolesAcc} actions={actions} transparent={prefs.transparent} />
       </ThemeProvider>
     ),
     {
@@ -125,39 +151,24 @@ export async function startMultimanBoard(): Promise<void> {
 
 /**
  * Fullscreen wrapper: paints the theme background across the whole screen and
- * mounts the reused `MultimanBoard` plus a one-line help footer. Lives inside
- * the `ThemeProvider` so `useTheme()` resolves; also wires the quit keys.
+ * mounts the interactive console. Lives inside the `ThemeProvider` so
+ * `useTheme()` resolves. All navigation / edit / chat keys (incl. q / Ctrl-C
+ * quit, gated per mode) live in {@link InteractiveBoard}; mutations route
+ * through the `actions` wired in `startMultimanBoard`.
  */
 function BoardShell(props: {
   tasks: Accessor<MultimanTask[]>
   roles: Accessor<MultimanRole[]>
+  actions: BoardActions
   transparent: boolean
 }) {
   const themeCtx = useTheme()
   const { theme } = themeCtx
   onMount(() => themeCtx.setTransparentBackground(props.transparent))
 
-  // 'q' and Ctrl-C both quit (exitOnCtrlC is off, so we handle Ctrl-C here).
-  // process.exit fires the render's onDestroy, which tears down the client +
-  // timers. Uses the codebase's `useBindings` keymap rather than a raw opentui
-  // key handler so it matches every other kobe TUI surface.
-  useBindings(() => ({
-    bindings: [
-      { key: "q", cmd: () => process.exit(0) },
-      { key: "ctrl+c", cmd: () => process.exit(0) },
-    ],
-  }))
-
   return (
     <box flexDirection="column" flexGrow={1} backgroundColor={theme.background}>
-      <box flexGrow={1} flexShrink={1}>
-        <MultimanBoard tasks={props.tasks} roles={props.roles} />
-      </box>
-      <box flexShrink={0} paddingLeft={1} paddingRight={1} paddingTop={1}>
-        <text fg={theme.textMuted} attributes={TextAttributes.DIM} wrapMode="none">
-          [q] quit · [Ctrl-C] quit · live multiman board
-        </text>
-      </box>
+      <InteractiveBoard tasks={props.tasks} roles={props.roles} actions={props.actions} />
     </box>
   )
 }
