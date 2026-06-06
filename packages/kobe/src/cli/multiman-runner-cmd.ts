@@ -22,9 +22,12 @@
  * runner submodule only imports `./types`.
  */
 
+import { mkdir, writeFile } from "node:fs/promises"
+import { dirname, join } from "node:path"
+import { assetFiles } from "@sma1lboy/multiman/assets"
 import { runLoop } from "@sma1lboy/multiman/runner"
 import type { ExecuteResult, RunnerDeps } from "@sma1lboy/multiman/runner"
-import type { Task } from "@sma1lboy/multiman/types"
+import type { Asset, Task } from "@sma1lboy/multiman/types"
 import { connectOrStartDaemon } from "../client/daemon-process.ts"
 import type { KobeDaemonClient } from "../client/index.ts"
 import { interactiveEngineCommand } from "../engine/interactive-command.ts"
@@ -148,6 +151,36 @@ export interface KobeExecutorOpts {
    * fully-materialized task.
    */
   readonly fetchTask?: (id: string) => Promise<Task>
+  /**
+   * Fetch the assets (skills / MCP servers) attached to a role, so they can be
+   * injected into the task's worktree BEFORE the engine launches. Omit in unit
+   * tests with no role assets — injection is then skipped.
+   */
+  readonly fetchAssets?: (roleId: string) => Promise<Asset[]>
+}
+
+/**
+ * Inject a role's assets into the task's worktree before the engine starts:
+ * skills land at `.claude/skills/<name>/SKILL.md`, MCP servers merge into a
+ * single `.mcp.json`. Returns the number of files written. Best-effort and
+ * skipped entirely when the task has no role or the role has no assets.
+ */
+async function injectRoleAssets(
+  task: Task,
+  workDir: string,
+  fetchAssets: ((roleId: string) => Promise<Asset[]>) | undefined,
+  log: (msg: string) => void,
+): Promise<number> {
+  if (!task.role_id || !fetchAssets) return 0
+  const assets = await fetchAssets(task.role_id)
+  const files = assetFiles(assets)
+  for (const f of files) {
+    const abs = join(workDir, f.path)
+    await mkdir(dirname(abs), { recursive: true })
+    await writeFile(abs, f.content, "utf8")
+  }
+  if (files.length > 0) log(`injected ${files.length} asset file(s) from ${assets.length} asset(s) into ${workDir}`)
+  return files.length
 }
 
 /**
@@ -190,6 +223,15 @@ export function makeKobeExecutor(
     // that are fine under bun but we keep them off the cold CLI path.
     const { ensureSession, tmuxSessionName } = await import("../tui/panes/terminal/tmux.ts")
     const { waitForEnginePane, deliverFirstPrompt } = await import("../tmux/prompt-delivery.ts")
+
+    // Inject the role's assets (skills / MCP) into the worktree BEFORE the engine
+    // launches, so claude picks them up on startup. Best-effort: a failure here
+    // shouldn't sink the task, but surface it.
+    try {
+      await injectRoleAssets(task, workDir, opts.fetchAssets, log)
+    } catch (err) {
+      log(`asset injection failed (continuing): ${err instanceof Error ? err.message : String(err)}`)
+    }
 
     const session = tmuxSessionName(kobeTaskId)
     const ok = await ensureSession({
@@ -355,6 +397,7 @@ export async function runMultimanRunner(argv: readonly string[]): Promise<void> 
     timeoutMs: parsed.timeoutMs,
     log,
     fetchTask: (id) => client.request<Task>("multiman", { method: "task.get", params: { id } }),
+    fetchAssets: (rid) => client.request<Asset[]>("multiman", { method: "role.assets", params: { roleId: rid } }),
   })
 
   const deps: RunnerDeps = {

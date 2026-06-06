@@ -28,6 +28,9 @@ import type { KobeDaemonClient } from "../client/index.ts"
  *  error; the kernel is still the source of truth). */
 const ROLE_KINDS = ["worker", "orchestrator", "collector"] as const
 
+/** Asset kinds accepted by `asset create` (validated client-side; kernel is SoT). */
+const ASSET_KINDS = ["skill", "mcp"] as const
+
 const MULTIMAN_USAGE = [
   "Usage: kobe multiman <noun> <verb> [args] [flags]",
   "",
@@ -38,6 +41,11 @@ const MULTIMAN_USAGE = [
   "Commands:",
   "  role create --name <n> --kind <worker|orchestrator|collector> [--instructions <s>]",
   "  role list",
+  "  role attach <roleId> --asset <assetId>",
+  "  role detach <roleId> --asset <assetId>",
+  "  role assets <roleId>",
+  "  asset create --kind <skill|mcp> --name <n> [--spec <json>] [--version <v>]",
+  "  asset list [--kind <skill|mcp>]",
   "  task create --title <t> [--role <id>] [--repo <path>] [--priority <n>]",
   "  task list [--status <s>]",
   "  task assign <taskId> --role <id>",
@@ -202,7 +210,47 @@ function toRpc(noun: string, verb: string, parsed: ParsedArgs): { method: string
       }
     }
     if (verb === "list") return { method: "role.list", params: {} }
+    if (verb === "attach") {
+      const id = requirePositional(positionals, "<roleId>")
+      return { method: "asset.attach", params: { roleId: id, assetId: required(flags, "asset") } }
+    }
+    if (verb === "detach") {
+      const id = requirePositional(positionals, "<roleId>")
+      return { method: "asset.detach", params: { roleId: id, assetId: required(flags, "asset") } }
+    }
+    if (verb === "assets") {
+      return { method: "role.assets", params: { roleId: requirePositional(positionals, "<roleId>") } }
+    }
     throw new CliError(`unknown role command: ${verb}`)
+  }
+
+  if (noun === "asset") {
+    if (verb === "create") {
+      const kind = optionalEnum(flags, "kind", ASSET_KINDS)
+      if (kind === undefined) throw new CliError(`--kind must be one of ${ASSET_KINDS.join(", ")}`)
+      const specRaw = optional(flags, "spec")
+      // Validate JSON client-side for a clean error; pass through as a string
+      // (the kernel accepts a JSON string or an object).
+      if (specRaw !== undefined) {
+        try {
+          JSON.parse(specRaw)
+        } catch {
+          throw new CliError("--spec must be valid JSON")
+        }
+      }
+      return {
+        method: "asset.create",
+        params: compact({
+          kind,
+          name: required(flags, "name"),
+          spec: specRaw,
+          version: optional(flags, "version"),
+        }),
+      }
+    }
+    if (verb === "list")
+      return { method: "asset.list", params: compact({ kind: optionalEnum(flags, "kind", ASSET_KINDS) }) }
+    throw new CliError(`unknown asset command: ${verb}`)
   }
 
   if (noun === "task") {
