@@ -44,4 +44,17 @@ describe("Dao role + task CRUD", () => {
     const dao = freshDao()
     expect(() => dao.createTask({ title: "x", role_id: "nope" })).toThrow()
   })
+
+  it("records mr_url and can look up a task by it", () => {
+    const dao = freshDao()
+    const t = dao.createTask({ title: "feature" })
+    dao.updateTask(t.id, { mr_url: "https://gitlab/mr/123", session_id: "sess-abc" })
+    const got = dao.getTask(t.id)
+    expect(got?.mr_url).toBe("https://gitlab/mr/123")
+    // lookup by mr_url (the review-comment → origin-task linkage)
+    const found = dao.raw().query("SELECT * FROM task WHERE mr_url=?").get("https://gitlab/mr/123") as
+      | { id: string }
+      | undefined
+    expect(found?.id).toBe(t.id)
+  })
 })

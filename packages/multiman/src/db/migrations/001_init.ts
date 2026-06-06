@@ -41,6 +41,7 @@ CREATE TABLE task (
   kobe_task_id  TEXT,                          -- 物化后的 kobe Task.id（ULID）
   repo          TEXT,                          -- 物化 worktree 用的源 repo 路径
   session_id    TEXT,                          -- engine 会话 id（跨重试复用）
+  mr_url        TEXT,                          -- 提交的 MR/PR url；review comment 按此回链原始 coding task
   work_dir      TEXT,                          -- 物化的 worktree 绝对路径
   source_kind   TEXT NOT NULL DEFAULT 'manual'
                 CHECK (source_kind IN ('manual','inbox','orchestrator')),
@@ -59,6 +60,7 @@ CREATE INDEX idx_task_role     ON task(role_id);
 CREATE INDEX idx_task_dag      ON task(dag_id);
 -- claim 热路径：status='assigned' AND role_id=? ORDER BY priority DESC, created_at ASC
 CREATE INDEX idx_task_claim    ON task(status, role_id, priority, created_at);
+CREATE INDEX idx_task_mr       ON task(mr_url);
 
 -- dag_edge：依赖边（from 完成才解锁 to）
 CREATE TABLE dag_edge (

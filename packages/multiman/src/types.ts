@@ -51,6 +51,7 @@ export interface Task {
   kobe_task_id: string | null
   repo: string | null
   session_id: string | null
+  mr_url: string | null
   work_dir: string | null
   source_kind: TaskSourceKind
   source_ref: string | null
