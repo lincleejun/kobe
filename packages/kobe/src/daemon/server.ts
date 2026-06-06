@@ -25,6 +25,7 @@ import {
 } from "../engine/hook-events.ts"
 import type { Orchestrator } from "../orchestrator/core.ts"
 import { ulid } from "../orchestrator/index/ulid.ts"
+import type { GitWorktreeManager } from "../orchestrator/worktree/manager.ts"
 import type { Task, VendorId } from "../types/task.ts"
 import { CURRENT_VERSION, type UpdateInfo, checkLatestVersion } from "../version.ts"
 import { DEFAULT_AUTO_TITLE_POLL_MS, startAutoTitlePoller } from "./auto-title-poller.ts"
@@ -75,6 +76,16 @@ export interface DaemonServerOptions {
   readonly pidPath?: string
   readonly homeDir?: string
   readonly startedAt?: Date
+  /**
+   * Worktree manager used by the multiman materialize adapter to CREATE a
+   * worktree on disk when one doesn't exist yet (the kernel's `adoptWorktree`
+   * port is create-or-adopt — see the adapter below). Wired from
+   * `createKobeCore().worktrees`. Optional so existing callers/tests that
+   * don't drive multiman keep compiling; when omitted the adapter falls back
+   * to adopt-only (a missing worktree then surfaces as kobe's normal
+   * "not an adoptable git worktree" error).
+   */
+  readonly worktrees?: GitWorktreeManager
   readonly onStop?: () => void | Promise<void>
   /** Override the npm version check (tests inject a fake to avoid the network). */
   readonly checkUpdate?: () => Promise<UpdateInfo | null>
@@ -215,13 +226,41 @@ export async function startDaemonServer(orch: Orchestrator, options: DaemonServe
     () => new Date().toISOString(),
     () => ulid(),
   )
+  // Create-or-adopt adapter for the multiman kernel's `adoptWorktree` port
+  // (KOB / M0 Finding 1). The kernel's `materialize` calls this on the first
+  // `→ running` transition with a DETERMINISTIC path/branch
+  // (`<repo>/.claude/worktrees/<taskId>` on `multiman/<taskId>`). kobe's
+  // `orch.adoptWorktree` only ADOPTS a pre-existing git worktree — it never
+  // runs `git worktree add` — so the kernel could never create the worktree
+  // the first time. The git work lives HERE (the kernel stays pure): we first
+  // CREATE the worktree on disk via the worktree manager (idempotent — it
+  // returns the existing one when the path/branch already match, and never
+  // hijacks a worktree on a different branch), then adopt it as a kobe task.
+  // Both halves are idempotent, so a crash-retry of materialize is safe:
+  //   - worktree already on disk on `multiman/<taskId>` → manager returns it
+  //   - already a kobe task for that path → adopt(ifExists:"return") returns it
+  // `baseRef:"HEAD"` roots the fresh branch at the repo's current commit,
+  // which is also correct for a detached HEAD (it's just a commit-ish).
+  const worktrees = options.worktrees
+  const adoptWorktreeAdapter = async (i: {
+    repo: string
+    worktreePath: string
+    branch: string
+    ifExists: "return"
+  }): Promise<{ id: string; worktreePath: string }> => {
+    if (worktrees) await worktrees.create(i.repo, i.branch, i.worktreePath, "HEAD")
+    const t = await orch.adoptWorktree({
+      repo: i.repo,
+      worktreePath: i.worktreePath,
+      branch: i.branch,
+      ifExists: i.ifExists,
+    })
+    return { id: t.id, worktreePath: t.worktreePath }
+  }
   const multimanKernel = new MultimanKernel({
     dao: mmDao,
     orchestrator: {
-      adoptWorktree: (i) =>
-        orch
-          .adoptWorktree({ repo: i.repo, worktreePath: i.worktreePath, branch: i.branch, ifExists: i.ifExists })
-          .then((t) => ({ id: t.id, worktreePath: t.worktreePath })),
+      adoptWorktree: adoptWorktreeAdapter,
     },
     now: () => new Date().toISOString(),
     publish: (kind, payload) => bus.publish("multiman", { kind, payload }),

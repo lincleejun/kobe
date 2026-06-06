@@ -98,6 +98,7 @@ export async function runDaemonSubcommand(argv: readonly string[]): Promise<void
     socketPath,
     pidPath,
     homeDir: core.homeDir,
+    worktrees: core.worktrees,
     onStop: async () => {
       await core.close()
     },

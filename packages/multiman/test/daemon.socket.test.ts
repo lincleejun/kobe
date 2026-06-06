@@ -85,6 +85,9 @@ describe.if(ENABLED)("daemon socket — multiman passthrough + materialize", () 
       socketPath,
       pidPath,
       homeDir,
+      // Wire the worktree manager so the materialize adapter can CREATE the
+      // worktree on disk (create-or-adopt) — the whole point of test #4 below.
+      worktrees: core.worktrees,
       // Disable background pollers — keep the test deterministic.
       updatePollMs: 0,
       autoTitlePollMs: 0,
@@ -173,15 +176,12 @@ describe.if(ENABLED)("daemon socket — multiman passthrough + materialize", () 
     const claimed = await mm<Task | null>("task.claim", { roleId: role.id })
     expect(claimed?.id).toBe(created.id)
 
-    // kobe's adoptWorktree ADOPTS an existing git worktree — it never runs
-    // `git worktree add`. In production the runner (or a kobe hook) creates the
-    // worktree on disk at the deterministic path the kernel computes, then
-    // materialize-on-running adopts it. Mirror that: create the worktree at
-    // `<repo>/.claude/worktrees/<taskId>` on `multiman/<taskId>` before the
-    // running transition. (kernel.test.ts asserts the same "adopts, not
-    // creates" contract with a fake orchestrator.)
+    // No manual `git worktree add` here: the kernel's materialize-on-running
+    // calls the daemon's create-or-adopt adapter (server.ts), which CREATES the
+    // worktree on disk at the deterministic path the kernel computes
+    // (`<repo>/.claude/worktrees/<taskId>` on `multiman/<taskId>`) and then
+    // adopts it. This proves the system builds the worktree itself.
     const expectedWorktree = join(repoDir, ".claude", "worktrees", created.id)
-    git(repoDir, "worktree", "add", "-b", `multiman/${created.id}`, expectedWorktree, "HEAD")
 
     const running = await mm<Task>("task.transition", { id: created.id, to: "running" })
 
