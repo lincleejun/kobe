@@ -1,1 +1,10 @@
-export const MULTIMAN_PACKAGE = "@sma1lboy/multiman"
+// src/index.ts — public entry point.
+export { MultimanKernel } from "@/kernel"
+export type { KernelDeps, KobeOrchestratorPort } from "@/kernel"
+export { makeRpcHandler } from "@/rpc"
+export type { RpcHandler } from "@/rpc"
+export { openDb } from "@/db/open"
+export { runMigrations } from "@/db/migrate"
+export { Dao } from "@/db/dao"
+export { startSweeper } from "@/sweeper"
+export * from "@/types"
