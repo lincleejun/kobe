@@ -44,6 +44,14 @@ const MULTIMAN_USAGE = [
   "  task claim --role <id>",
   "  task transition <taskId> --to <status>",
   "  task get <taskId>",
+  "  inbox push --source <s> --kind <k> [--payload <json>] [--severity <action|attention|info>]",
+  "  inbox list [--status <new|claimed|processed|archived>]",
+  "  inbox claim --consumer <id>",
+  "  inbox mark <itemId> --status <new|claimed|processed|archived>",
+  "  schedule create --name <n> --trigger <cron|manual> [--cron <expr>] --target-kind <role|workflow> --target-ref <ref> [--mode <collect|run_only>] [--concurrency <skip|queue|replace>]",
+  "  schedule list [--enabled]",
+  "  schedule enable <id> --enabled <true|false>",
+  "  schedule run-now <id>",
   "  runner --role <id> [--timeout-ms <n>]   (long-running autonomous role-runner)",
   "",
   "Global: [--pretty] [--help]",
@@ -104,6 +112,12 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
       continue
     }
     const next = argv[i + 1]
+    // `--enabled` is the one optional-value flag: a bare `--enabled` (used by
+    // `schedule list --enabled`) means true; `--enabled true|false` still works.
+    if (key === "enabled" && (next === undefined || next.startsWith("--"))) {
+      flags.set(key, "true")
+      continue
+    }
     if (next === undefined || next.startsWith("--")) {
       throw new CliError(`flag --${key} requires a value`)
     }
@@ -137,6 +151,29 @@ function optionalPositiveInt(flags: Flags, key: string): number | undefined {
   if (!Number.isInteger(n) || n <= 0) throw new CliError(`--${key} must be a positive integer`)
   return n
 }
+
+/** Parse a required boolean flag (`true`/`false`, also `1`/`0`). */
+function requiredBool(flags: Flags, key: string): boolean {
+  const v = required(flags, key)
+  if (v === "true" || v === "1") return true
+  if (v === "false" || v === "0") return false
+  throw new CliError(`--${key} must be true or false`)
+}
+
+/** Validate a flag value against an allowed set, when present. */
+function optionalEnum<T extends string>(flags: Flags, key: string, allowed: readonly T[]): T | undefined {
+  const v = optional(flags, key)
+  if (v === undefined) return undefined
+  if (!allowed.includes(v as T)) throw new CliError(`--${key} must be one of ${allowed.join(", ")}`)
+  return v as T
+}
+
+const INBOX_SEVERITIES = ["action", "attention", "info"] as const
+const INBOX_STATUSES = ["new", "claimed", "processed", "archived"] as const
+const SCHEDULE_TRIGGERS = ["cron", "manual"] as const
+const SCHEDULE_TARGET_KINDS = ["role", "workflow"] as const
+const SCHEDULE_MODES = ["collect", "run_only"] as const
+const SCHEDULE_CONCURRENCY = ["skip", "queue", "replace"] as const
 
 /** Drop undefined-valued keys so the kernel sees a clean params object. */
 function compact(obj: Record<string, unknown>): Record<string, unknown> {
@@ -192,6 +229,69 @@ function toRpc(noun: string, verb: string, parsed: ParsedArgs): { method: string
     }
     if (verb === "get") return { method: "task.get", params: { id: requirePositional(positionals, "<taskId>") } }
     throw new CliError(`unknown task command: ${verb}`)
+  }
+
+  if (noun === "inbox") {
+    if (verb === "push") {
+      return {
+        method: "inbox.push",
+        params: compact({
+          source: required(flags, "source"),
+          kind: required(flags, "kind"),
+          payload: optional(flags, "payload"),
+          severity: optionalEnum(flags, "severity", INBOX_SEVERITIES),
+        }),
+      }
+    }
+    if (verb === "list") {
+      return { method: "inbox.list", params: compact({ status: optionalEnum(flags, "status", INBOX_STATUSES) }) }
+    }
+    if (verb === "claim") return { method: "inbox.claim", params: { consumer: required(flags, "consumer") } }
+    if (verb === "mark") {
+      const id = requirePositional(positionals, "<itemId>")
+      const status = optionalEnum(flags, "status", INBOX_STATUSES)
+      if (status === undefined) throw new CliError(`--status must be one of ${INBOX_STATUSES.join(", ")}`)
+      return { method: "inbox.mark", params: { id, status } }
+    }
+    throw new CliError(`unknown inbox command: ${verb}`)
+  }
+
+  if (noun === "schedule") {
+    if (verb === "create") {
+      const trigger = optionalEnum(flags, "trigger", SCHEDULE_TRIGGERS)
+      if (trigger === undefined) throw new CliError(`--trigger must be one of ${SCHEDULE_TRIGGERS.join(", ")}`)
+      if (trigger === "cron" && optional(flags, "cron") === undefined) {
+        throw new CliError("--cron is required when --trigger is cron")
+      }
+      const targetKind = optionalEnum(flags, "target-kind", SCHEDULE_TARGET_KINDS)
+      if (targetKind === undefined)
+        throw new CliError(`--target-kind must be one of ${SCHEDULE_TARGET_KINDS.join(", ")}`)
+      return {
+        method: "schedule.create",
+        params: compact({
+          name: required(flags, "name"),
+          triggerKind: trigger,
+          cronExpr: optional(flags, "cron"),
+          targetKind,
+          targetRef: required(flags, "target-ref"),
+          executionMode: optionalEnum(flags, "mode", SCHEDULE_MODES),
+          concurrencyPolicy: optionalEnum(flags, "concurrency", SCHEDULE_CONCURRENCY),
+        }),
+      }
+    }
+    if (verb === "list") {
+      // `--enabled` present → filter; bare or `--enabled true|false` both parse.
+      const enabled = flags.has("enabled") ? requiredBool(flags, "enabled") : undefined
+      return { method: "schedule.list", params: compact({ enabled }) }
+    }
+    if (verb === "enable") {
+      const id = requirePositional(positionals, "<id>")
+      return { method: "schedule.enable", params: { id, enabled: requiredBool(flags, "enabled") } }
+    }
+    if (verb === "run-now") {
+      return { method: "schedule.runNow", params: { id: requirePositional(positionals, "<id>") } }
+    }
+    throw new CliError(`unknown schedule command: ${verb}`)
   }
 
   throw new CliError(`unknown multiman command: ${noun}`)

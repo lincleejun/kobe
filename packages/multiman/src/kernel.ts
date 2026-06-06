@@ -161,6 +161,11 @@ export class MultimanKernel {
   getDao(): Dao {
     return this.dao
   }
+  // Event passthrough for the part-B scheduler worker, which fires schedules via
+  // the pure `scheduleTick` (it holds the dao, not the private publish fn).
+  publishEvent(kind: string, payload: unknown): void {
+    this.publish(kind, payload)
+  }
 
   async transition(id: string, to: TaskStatus, reason: string, opts: { roleId?: string } = {}): Promise<Task> {
     const t = this.dao.getTask(id)

@@ -216,7 +216,7 @@ export async function startDaemonServer(orch: Orchestrator, options: DaemonServe
   await mkdir(dirname(mmDbPath), { recursive: true })
   // Dynamic import so multiman's `bun:sqlite` dependency stays OUT of kobe's
   // static module graph — keeps vitest (node) able to LOAD this file.
-  const { openDb, runMigrations, Dao, MultimanKernel, makeRpcHandler, startSweeper } = await import(
+  const { openDb, runMigrations, Dao, MultimanKernel, makeRpcHandler, startSweeper, startScheduler } = await import(
     "@sma1lboy/multiman"
   )
   const mmDb = openDb(mmDbPath)
@@ -269,6 +269,10 @@ export async function startDaemonServer(orch: Orchestrator, options: DaemonServe
   })
   const mmHandler = makeRpcHandler(multimanKernel)
   const stopSweeper = startSweeper(multimanKernel)
+  // Scheduler worker (S2 part B): on its interval it fires every DUE schedule,
+  // pushing a `schedule:<name>` inbox_item and advancing next_run_at. Same
+  // background-worker shape as the sweeper above.
+  const stopScheduler = startScheduler(multimanKernel)
 
   // Transient, engine-driven per-task activity (KOB). Folded from normalized
   // hook events (`engine.reportEvent`) and pushed on the `engine-state`
@@ -393,6 +397,7 @@ export async function startDaemonServer(orch: Orchestrator, options: DaemonServe
       // Multiman: stop the kernel sweeper interval and close its SQLite handle
       // so the daemon releases the DB file on shutdown.
       stopSweeper()
+      stopScheduler()
       mmDb.close()
       // tmux is intentionally untouched here: closing the daemon never tears
       // down task sessions. Session teardown lives ONLY in `kobe reset` /
