@@ -6,6 +6,8 @@
     ".": "./src/index.ts",
     "./assets": "./src/assets.ts",
     "./client": "./src/client/index.ts",
+    "./decompose-parse": "./src/decompose-parse.ts",
+    "./orchestrator": "./src/orchestrator.ts",
     "./runner": "./src/runner.ts",
     "./types": "./src/types.ts"
   },
