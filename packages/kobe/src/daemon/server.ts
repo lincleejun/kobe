@@ -14,7 +14,9 @@
 
 import { mkdir, readFile, unlink, writeFile } from "node:fs/promises"
 import { type Server, type Socket, createServer } from "node:net"
-import { dirname } from "node:path"
+import { homedir } from "node:os"
+import { dirname, join } from "node:path"
+import { Dao, MultimanKernel, makeRpcHandler, openDb, runMigrations, startSweeper } from "@sma1lboy/multiman"
 import {
   type EngineActivityDetail,
   type EngineActivityKind,
@@ -23,6 +25,7 @@ import {
   reduceActivity,
 } from "../engine/hook-events.ts"
 import type { Orchestrator } from "../orchestrator/core.ts"
+import { ulid } from "../orchestrator/index/ulid.ts"
 import type { Task, VendorId } from "../types/task.ts"
 import { CURRENT_VERSION, type UpdateInfo, checkLatestVersion } from "../version.ts"
 import { DEFAULT_AUTO_TITLE_POLL_MS, startAutoTitlePoller } from "./auto-title-poller.ts"
@@ -137,11 +140,24 @@ export async function startDaemonServer(orch: Orchestrator, options: DaemonServe
   let stopping = false
 
   // Attached GUIs — the refcount that gates lazy shutdown. Counts only
-  // `holdsLifetime` (role "gui") clients, not every `subscribed` pane.
+  // `holdsLifetime` (role "gui" or "runner") clients, not every `subscribed`
+  // pane.
   function guiCount(): number {
     let n = 0
     for (const c of clients) if (c.holdsLifetime) n++
     return n
+  }
+
+  // Second keepalive axis (KOB): even with no attached gui/runner, the daemon
+  // must stay up while the multiman kernel still has UNFINISHED work — a task
+  // in any status other than the terminal `done`/`cancelled` is live
+  // orchestration state we can't self-stop on top of. Read at idle-arm time
+  // and again when the grace fires, so a task that finishes during the grace
+  // lets the daemon go, and one that's still running keeps it. `multimanKernel`
+  // is a `const` declared just below; this only runs at idle-check time, well
+  // after construction, so there's no TDZ hazard.
+  function hasActiveMultimanWork(): boolean {
+    return multimanKernel.listTasks().some((t) => t.status !== "done" && t.status !== "cancelled")
   }
 
   function cancelIdleTimer(): void {
@@ -152,12 +168,12 @@ export async function startDaemonServer(orch: Orchestrator, options: DaemonServe
   }
 
   function maybeArmIdleShutdown(): void {
-    if (stopping || guiCount() > 0) return
+    if (stopping || guiCount() > 0 || hasActiveMultimanWork()) return
     cancelIdleTimer()
     logDaemonInfo("idle", `last gui gone — arming ${idleGraceMs}ms idle-stop grace`)
     idleTimer = setTimeout(() => {
       idleTimer = null
-      if (stopping || guiCount() > 0) return
+      if (stopping || guiCount() > 0 || hasActiveMultimanWork()) return
       logDaemonInfo("idle", "grace elapsed with no gui — self-stopping")
       void stopSoon().catch((err) => logDaemonError("daemon-idle-shutdown", err))
     }, idleGraceMs)
@@ -173,6 +189,41 @@ export async function startDaemonServer(orch: Orchestrator, options: DaemonServe
   bus.onPublish((event) => {
     broadcast(clients, { type: "event", name: event.channel, payload: event.payload })
   })
+
+  // Multiman kernel (KOB): the daemon mounts the multiman orchestration kernel
+  // in-process and exposes it over the existing unix socket via a single
+  // `multiman` passthrough request (see dispatch below). Its SQLite DB lives
+  // alongside the daemon's other state under `<home>/.kobe/`, where the socket,
+  // pidfile, and logs already live — `homeDir` here is the same value
+  // `defaultDaemonSocketPath`/`defaultDaemonPidPath` resolve from. The kernel's
+  // events fan out on the `multiman` channel. The Dao's id-gen reuses kobe's
+  // own ULID so multiman ids are lex-sortable + monotonic like kobe task ids.
+  const kobeHomeDir = options.homeDir ?? process.env.KOBE_HOME_DIR ?? homedir()
+  const mmDbPath = join(kobeHomeDir, ".kobe", "multiman.db")
+  // Ensure `<home>/.kobe/` exists before opening the DB — on a fresh home this
+  // dir isn't created until the socket/pid `mkdir`s below, and bun:sqlite's
+  // `create: true` only creates the FILE, not its parent dir (else SQLITE_CANTOPEN).
+  await mkdir(dirname(mmDbPath), { recursive: true })
+  const mmDb = openDb(mmDbPath)
+  runMigrations(mmDb)
+  const mmDao = new Dao(
+    mmDb,
+    () => new Date().toISOString(),
+    () => ulid(),
+  )
+  const multimanKernel = new MultimanKernel({
+    dao: mmDao,
+    orchestrator: {
+      adoptWorktree: (i) =>
+        orch
+          .adoptWorktree({ repo: i.repo, worktreePath: i.worktreePath, branch: i.branch, ifExists: i.ifExists })
+          .then((t) => ({ id: t.id, worktreePath: t.worktreePath })),
+    },
+    now: () => new Date().toISOString(),
+    publish: (kind, payload) => bus.publish("multiman", { kind, payload }),
+  })
+  const mmHandler = makeRpcHandler(multimanKernel)
+  const stopSweeper = startSweeper(multimanKernel)
 
   // Transient, engine-driven per-task activity (KOB). Folded from normalized
   // hook events (`engine.reportEvent`) and pushed on the `engine-state`
@@ -235,7 +286,7 @@ export async function startDaemonServer(orch: Orchestrator, options: DaemonServe
       if (client.subscribed) {
         logDaemonInfo(
           "conn",
-          `client #${client.id} (${client.holdsLifetime ? "gui" : "pane"}) disconnected — ${clients.size} client(s), ${guiCount()} gui left`,
+          `client #${client.id} (${client.holdsLifetime ? "gui/runner" : "pane"}) disconnected — ${clients.size} client(s), ${guiCount()} gui left`,
         )
       }
       // Last GUI gone → start the grace timer toward self-stop. Only a
@@ -294,6 +345,10 @@ export async function startDaemonServer(orch: Orchestrator, options: DaemonServe
       unsubscribeStore()
       if (updateTimer) clearInterval(updateTimer)
       stopAutoTitlePoller()
+      // Multiman: stop the kernel sweeper interval and close its SQLite handle
+      // so the daemon releases the DB file on shutdown.
+      stopSweeper()
+      mmDb.close()
       // tmux is intentionally untouched here: closing the daemon never tears
       // down task sessions. Session teardown lives ONLY in `kobe reset` /
       // `kobe kill-sessions` (`tmux -L kobe kill-server`). Keep it that way.
@@ -554,17 +609,27 @@ export async function startDaemonServer(orch: Orchestrator, options: DaemonServe
         reportActivity(taskId, kind, detail)
         return {}
       }
+      case "multiman": {
+        // Passthrough to the in-process multiman kernel: tunnel the JSON-RPC
+        // `{ method, params }` straight to the kernel's handler. The kernel
+        // owns its own param validation + error shapes; `handleRequest`'s
+        // try/catch turns a thrown kernel error into a normal response error.
+        const p = req.payload as { method: string; params?: Record<string, unknown> }
+        return await mmHandler(p.method, p.params ?? {})
+      }
       case "subscribe": {
         client.subscribed = true
         // role defaults to "pane": a subscriber that omits it is the safe
         // non-lifetime kind, so a future client can't accidentally pin the
-        // daemon open. Only a "gui" attach holds the daemon alive.
-        const role = payload.role === "gui" ? "gui" : "pane"
-        client.holdsLifetime = role === "gui"
-        // A GUI (re)attached → cancel any pending lazy-shutdown grace. A
-        // pane subscribing must NOT cancel it: panes alone never keep the
-        // daemon up, so a pane connecting during the grace window leaves the
-        // countdown running.
+        // daemon open. A "gui" attach (a human) and a "runner" attach (a
+        // multiman queue-drainer with live work in flight) both hold the
+        // daemon alive — they share the `holdsLifetime` refcount.
+        const role = payload.role === "gui" ? "gui" : payload.role === "runner" ? "runner" : "pane"
+        client.holdsLifetime = role === "gui" || role === "runner"
+        // A lifetime-holding client (gui or runner) (re)attached → cancel any
+        // pending lazy-shutdown grace. A pane subscribing must NOT cancel it:
+        // panes alone never keep the daemon up, so a pane connecting during the
+        // grace window leaves the countdown running.
         if (client.holdsLifetime) cancelIdleTimer()
         logDaemonInfo(
           "conn",
