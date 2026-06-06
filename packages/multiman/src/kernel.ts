@@ -2,10 +2,10 @@ import { nextRun } from "./cron"
 import { hasCycle } from "./dag"
 // src/kernel.ts
 import type { Dao } from "./db/dao"
-import type { CreateInboxItemInput, CreateScheduleInput } from "./db/dao"
+import type { CreateAssetInput, CreateInboxItemInput, CreateScheduleInput } from "./db/dao"
 import { CyclicDagError, GuardError } from "./errors"
 import { assertTransition } from "./state-machine"
-import type { Dag, DagEdge, InboxItem, InboxStatus, Role, RoleKind, Schedule, Task, TaskStatus } from "./types"
+import type { Asset, Dag, DagEdge, InboxItem, InboxStatus, Role, RoleKind, Schedule, Task, TaskStatus } from "./types"
 
 export interface KobeOrchestratorPort {
   adoptWorktree(input: {
@@ -122,6 +122,45 @@ export class MultimanKernel {
   }
   markInbox(id: string, status: InboxStatus): InboxItem {
     return this.dao.markInboxItem(id, status)
+  }
+
+  // ---- asset pass-throughs (S4) ----
+  createAsset(i: CreateAssetInput): Asset {
+    const a = this.dao.createAsset(i)
+    this.dao.logEvent({
+      actor_kind: "system",
+      actor_id: null,
+      action: "asset.create",
+      target_kind: "asset",
+      target_id: a.id,
+      details: "{}",
+    })
+    this.publish("asset.created", a)
+    return a
+  }
+  listAssets(f?: Parameters<Dao["listAssets"]>[0]): Asset[] {
+    return this.dao.listAssets(f)
+  }
+  attachAsset(roleId: string, assetId: string): { ok: true } {
+    this.dao.attachAsset(roleId, assetId)
+    this.dao.logEvent({
+      actor_kind: "system",
+      actor_id: null,
+      action: "asset.attach",
+      target_kind: "role",
+      target_id: roleId,
+      details: JSON.stringify({ assetId }),
+    })
+    this.publish("asset.attached", { roleId, assetId })
+    return { ok: true }
+  }
+  detachAsset(roleId: string, assetId: string): { ok: true } {
+    this.dao.detachAsset(roleId, assetId)
+    this.publish("asset.detached", { roleId, assetId })
+    return { ok: true }
+  }
+  assetsForRole(roleId: string): Asset[] {
+    return this.dao.assetsForRole(roleId)
   }
 
   // ---- schedule pass-throughs (S2) ----

@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test"
 import { runMigrations } from "@/db/migrate"
 import { openDb } from "@/db/open"
 import {
+  ASSET_KINDS,
   DAG_STATUSES,
   INBOX_SEVERITIES,
   INBOX_STATUSES,
@@ -36,6 +37,7 @@ describe("enum sync: TS arrays match SQL CHECK", () => {
   const inboxDdl = (db.query("SELECT sql FROM sqlite_master WHERE name='inbox_item'").get() as { sql: string }).sql
   const schedDdl = (db.query("SELECT sql FROM sqlite_master WHERE name='schedule'").get() as { sql: string }).sql
   const schedRunDdl = (db.query("SELECT sql FROM sqlite_master WHERE name='schedule_run'").get() as { sql: string }).sql
+  const assetDdl = (db.query("SELECT sql FROM sqlite_master WHERE name='asset'").get() as { sql: string }).sql
 
   it("task.status", () => expect(checkValues(taskDdl, "status")).toEqual([...TASK_STATUSES].sort()))
   it("task.source_kind", () => expect(checkValues(taskDdl, "source_kind")).toEqual([...TASK_SOURCE_KINDS].sort()))
@@ -53,4 +55,5 @@ describe("enum sync: TS arrays match SQL CHECK", () => {
   it("schedule.concurrency_policy", () =>
     expect(checkValues(schedDdl, "concurrency_policy")).toEqual([...SCHEDULE_CONCURRENCY_POLICIES].sort()))
   it("schedule_run.status", () => expect(checkValues(schedRunDdl, "status")).toEqual([...SCHEDULE_RUN_STATUSES].sort()))
+  it("asset.kind", () => expect(checkValues(assetDdl, "kind")).toEqual([...ASSET_KINDS].sort()))
 })

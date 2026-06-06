@@ -1,6 +1,8 @@
 // src/db/dao.ts
 import type { Database, SQLQueryBindings } from "bun:sqlite"
 import type {
+  Asset,
+  AssetKind,
   Dag,
   EventLogRow,
   InboxItem,
@@ -57,6 +59,14 @@ export interface CreateScheduleInput {
   execution_mode?: ScheduleExecutionMode
   concurrency_policy?: ScheduleConcurrencyPolicy
   next_run_at?: string | null
+}
+
+export interface CreateAssetInput {
+  kind: AssetKind
+  name: string
+  version?: string
+  spec?: string
+  path?: string | null
 }
 
 export class Dao {
@@ -296,6 +306,41 @@ export class Dao {
       .query("SELECT COUNT(*) AS c FROM schedule_run WHERE schedule_id=? AND status IN ('pending','running')")
       .get(scheduleId) as { c: number }
     return row.c
+  }
+
+  // ---- asset + role_asset ----
+  createAsset(i: CreateAssetInput): Asset {
+    const id = this.id()
+    this.db
+      .query("INSERT INTO asset (id,kind,name,version,spec,path,created_at) VALUES (?,?,?,?,?,?,?)")
+      .run(id, i.kind, i.name, i.version ?? "0.1.0", i.spec ?? "{}", i.path ?? null, this.now())
+    return this.getAsset(id)!
+  }
+  getAsset(id: string): Asset | undefined {
+    return this.db.query("SELECT * FROM asset WHERE id=?").get(id) as Asset | undefined
+  }
+  listAssets(f: { kind?: AssetKind } = {}): Asset[] {
+    if (f.kind) {
+      return this.db.query("SELECT * FROM asset WHERE kind=? ORDER BY created_at ASC").all(f.kind) as Asset[]
+    }
+    return this.db.query("SELECT * FROM asset ORDER BY created_at ASC").all() as Asset[]
+  }
+  // Idempotent: re-attaching the same (role,asset) pair is a no-op (PK conflict ignored).
+  attachAsset(roleId: string, assetId: string): void {
+    this.db.query("INSERT OR IGNORE INTO role_asset (role_id,asset_id) VALUES (?,?)").run(roleId, assetId)
+  }
+  detachAsset(roleId: string, assetId: string): void {
+    this.db.query("DELETE FROM role_asset WHERE role_id=? AND asset_id=?").run(roleId, assetId)
+  }
+  assetsForRole(roleId: string): Asset[] {
+    return this.db
+      .query(
+        `SELECT a.* FROM asset a
+           JOIN role_asset ra ON ra.asset_id = a.id
+          WHERE ra.role_id = ?
+          ORDER BY a.created_at ASC`,
+      )
+      .all(roleId) as Asset[]
   }
 
   // ---- event log ----

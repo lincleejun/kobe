@@ -46,6 +46,9 @@ export type ScheduleConcurrencyPolicy = (typeof SCHEDULE_CONCURRENCY_POLICIES)[n
 export const SCHEDULE_RUN_STATUSES = ["pending", "running", "done", "failed", "skipped"] as const
 export type ScheduleRunStatus = (typeof SCHEDULE_RUN_STATUSES)[number]
 
+export const ASSET_KINDS = ["skill", "mcp"] as const
+export type AssetKind = (typeof ASSET_KINDS)[number]
+
 export const TERMINAL_STATUSES: ReadonlySet<TaskStatus> = new Set(["done", "cancelled"])
 
 export interface Role {
@@ -138,6 +141,16 @@ export interface ScheduleRun {
   finished_at: string | null
   produced_inbox_item_id: string | null
   error: string | null
+}
+
+export interface Asset {
+  id: string
+  kind: AssetKind
+  name: string
+  version: string
+  spec: string
+  path: string | null
+  created_at: string
 }
 
 export interface EventLogRow {

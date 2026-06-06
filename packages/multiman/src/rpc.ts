@@ -1,6 +1,7 @@
 // src/rpc.ts
 import type { MultimanKernel } from "./kernel"
 import type {
+  AssetKind,
   InboxSeverity,
   InboxStatus,
   RoleKind,
@@ -23,6 +24,15 @@ function optStr(p: Params, k: string): string | undefined {
   if (v === undefined || v === null) return undefined
   if (typeof v !== "string") throw new Error(`invalid param: ${k}`)
   return v
+}
+// `spec` may arrive as a JSON string (CLI) or a plain object (programmatic).
+// Normalize to the JSON text the asset column stores. Undefined → undefined.
+function optSpec(p: Params, k: string): string | undefined {
+  const v = p[k]
+  if (v === undefined || v === null) return undefined
+  if (typeof v === "string") return v
+  if (typeof v === "object") return JSON.stringify(v)
+  throw new Error(`invalid param: ${k}`)
 }
 
 export type RpcHandler = (method: string, params: Params) => Promise<unknown>
@@ -119,6 +129,19 @@ export function makeRpcHandler(kernel: MultimanKernel): RpcHandler {
       return kernel.setScheduleEnabled(reqStr(p, "id"), p.enabled)
     },
     "schedule.runNow": (p) => kernel.scheduleRunNow(reqStr(p, "id")),
+    // asset.* (S4 scope). `spec` accepts a JSON string OR an object (stored as JSON text).
+    "asset.create": (p) =>
+      kernel.createAsset({
+        kind: reqStr(p, "kind") as AssetKind,
+        name: reqStr(p, "name"),
+        version: optStr(p, "version"),
+        spec: optSpec(p, "spec"),
+        path: optStr(p, "path") ?? null,
+      }),
+    "asset.list": (p) => kernel.listAssets({ kind: optStr(p, "kind") as AssetKind | undefined }),
+    "asset.attach": (p) => kernel.attachAsset(reqStr(p, "roleId"), reqStr(p, "assetId")),
+    "asset.detach": (p) => kernel.detachAsset(reqStr(p, "roleId"), reqStr(p, "assetId")),
+    "role.assets": (p) => kernel.assetsForRole(reqStr(p, "roleId")),
   }
   return async (method, params) => {
     const fn = routes[method]
