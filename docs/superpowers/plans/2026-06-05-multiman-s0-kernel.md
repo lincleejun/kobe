@@ -287,7 +287,7 @@ git commit -m "feat(multiman): enum const arrays, row types, ids, errors"
 
 ```ts
 // test/db.test.ts
-import { describe, it, expect } from "vitest"
+import { describe, it, expect } from "bun:test"
 import { openDb } from "@/db/open"
 
 describe("openDb", () => {
@@ -305,7 +305,7 @@ describe("openDb", () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd packages/multiman && bunx vitest run test/db.test.ts`
+Run: `cd packages/multiman && bun test test/db.test.ts`
 Expected: FAIL — cannot resolve `@/db/open`.
 
 - [ ] **Step 3: Implement open.ts**
@@ -325,7 +325,7 @@ export function openDb(path: string): Database {
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd packages/multiman && bunx vitest run test/db.test.ts`
+Run: `cd packages/multiman && bun test test/db.test.ts`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
@@ -384,7 +384,7 @@ describe("runMigrations", () => {
 
 - [ ] **Step 3: Run to verify it fails**
 
-Run: `cd packages/multiman && bunx vitest run test/db.test.ts`
+Run: `cd packages/multiman && bun test test/db.test.ts`
 Expected: FAIL — cannot resolve `@/db/migrate`.
 
 - [ ] **Step 4: Implement migrate.ts**
@@ -417,7 +417,7 @@ export function runMigrations(db: Database): void {
 
 - [ ] **Step 5: Run to verify it passes**
 
-Run: `cd packages/multiman && bunx vitest run test/db.test.ts`
+Run: `cd packages/multiman && bun test test/db.test.ts`
 Expected: PASS (both tests).
 
 - [ ] **Step 6: Commit**
@@ -436,7 +436,7 @@ git commit -m "feat(multiman): migration runner + 001_init schema"
 
 ```ts
 // test/enum-sync.test.ts
-import { describe, it, expect } from "vitest"
+import { describe, it, expect } from "bun:test"
 import { openDb } from "@/db/open"
 import { runMigrations } from "@/db/migrate"
 import { TASK_STATUSES, ROLE_KINDS, ROLE_STATUSES, DAG_STATUSES, TASK_SOURCE_KINDS } from "@/types"
@@ -466,7 +466,7 @@ describe("enum sync: TS arrays match SQL CHECK", () => {
 
 - [ ] **Step 2: Run — verify it passes (or catches a real drift)**
 
-Run: `cd packages/multiman && bunx vitest run test/enum-sync.test.ts`
+Run: `cd packages/multiman && bun test test/enum-sync.test.ts`
 Expected: PASS. If it fails, the 001_init.sql CHECK lists drifted from types.ts — fix the SQL.
 
 - [ ] **Step 3: Commit**
@@ -486,7 +486,7 @@ git commit -m "test(multiman): enum sync between TS arrays and SQL CHECK"
 
 ```ts
 // test/dao.test.ts
-import { describe, it, expect } from "vitest"
+import { describe, it, expect } from "bun:test"
 import { openDb } from "@/db/open"
 import { runMigrations } from "@/db/migrate"
 import { Dao } from "@/db/dao"
@@ -529,7 +529,7 @@ describe("Dao role + task CRUD", () => {
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `cd packages/multiman && bunx vitest run test/dao.test.ts`
+Run: `cd packages/multiman && bun test test/dao.test.ts`
 Expected: FAIL — cannot resolve `@/db/dao`.
 
 - [ ] **Step 3: Implement dao.ts**
@@ -643,7 +643,7 @@ export class Dao {
 
 - [ ] **Step 4: Run to verify it passes**
 
-Run: `cd packages/multiman && bunx vitest run test/dao.test.ts`
+Run: `cd packages/multiman && bun test test/dao.test.ts`
 Expected: PASS (all 4).
 
 - [ ] **Step 5: Commit**
@@ -667,7 +667,7 @@ git commit -m "feat(multiman): typed DAO for task/role/dag/event"
 
 ```ts
 // test/state-machine.test.ts
-import { describe, it, expect } from "vitest"
+import { describe, it, expect } from "bun:test"
 import { canTransition, assertTransition } from "@/state-machine"
 import { InvalidTransitionError } from "@/errors"
 
@@ -703,7 +703,7 @@ describe("state machine", () => {
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `cd packages/multiman && bunx vitest run test/state-machine.test.ts`
+Run: `cd packages/multiman && bun test test/state-machine.test.ts`
 Expected: FAIL — cannot resolve `@/state-machine`.
 
 - [ ] **Step 3: Implement state-machine.ts**
@@ -740,7 +740,7 @@ export function assertTransition(from: TaskStatus, to: TaskStatus): void {
 
 - [ ] **Step 4: Run to verify it passes**
 
-Run: `cd packages/multiman && bunx vitest run test/state-machine.test.ts`
+Run: `cd packages/multiman && bun test test/state-machine.test.ts`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
@@ -764,7 +764,7 @@ git commit -m "feat(multiman): task state machine (pure)"
 
 ```ts
 // test/dag.test.ts
-import { describe, it, expect } from "vitest"
+import { describe, it, expect } from "bun:test"
 import { hasCycle } from "@/dag"
 
 describe("hasCycle", () => {
@@ -782,7 +782,7 @@ describe("hasCycle", () => {
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `cd packages/multiman && bunx vitest run test/dag.test.ts`
+Run: `cd packages/multiman && bun test test/dag.test.ts`
 Expected: FAIL — cannot resolve `@/dag`.
 
 - [ ] **Step 3: Implement dag.ts (Kahn topological sort)**
@@ -813,7 +813,7 @@ export function hasCycle(nodes: string[], edges: [string, string][]): boolean {
 
 - [ ] **Step 4: Run to verify it passes**
 
-Run: `cd packages/multiman && bunx vitest run test/dag.test.ts`
+Run: `cd packages/multiman && bun test test/dag.test.ts`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
@@ -841,7 +841,7 @@ real git.
 
 ```ts
 // test/kernel.test.ts
-import { describe, it, expect } from "vitest"
+import { describe, it, expect } from "bun:test"
 import { openDb } from "@/db/open"
 import { runMigrations } from "@/db/migrate"
 import { Dao } from "@/db/dao"
@@ -898,7 +898,7 @@ describe("kernel basic + guards", () => {
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `cd packages/multiman && bunx vitest run test/kernel.test.ts`
+Run: `cd packages/multiman && bun test test/kernel.test.ts`
 Expected: FAIL — cannot resolve `@/kernel`.
 
 - [ ] **Step 3: Implement kernel.ts scaffold (this task: ctor, createTask, getTask, listTasks, transition skeleton with shape + role guard + event)**
@@ -983,7 +983,7 @@ export class MultimanKernel {
 
 - [ ] **Step 4: Run to verify it passes**
 
-Run: `cd packages/multiman && bunx vitest run test/kernel.test.ts`
+Run: `cd packages/multiman && bun test test/kernel.test.ts`
 Expected: PASS (3 tests).
 
 - [ ] **Step 5: Commit**
@@ -1026,7 +1026,7 @@ describe("claimNextTask", () => {
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `cd packages/multiman && bunx vitest run test/kernel.test.ts`
+Run: `cd packages/multiman && bun test test/kernel.test.ts`
 Expected: FAIL — `kernel.claimNextTask is not a function`.
 
 - [ ] **Step 3: Implement claimNextTask**
@@ -1055,7 +1055,7 @@ claimNextTask(roleId: string): Task | null {
 
 - [ ] **Step 4: Run to verify it passes**
 
-Run: `cd packages/multiman && bunx vitest run test/kernel.test.ts`
+Run: `cd packages/multiman && bun test test/kernel.test.ts`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
@@ -1116,7 +1116,7 @@ tests to `await kernel.transition(...)` and add `await` in claim test setup tran
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `cd packages/multiman && bunx vitest run test/kernel.test.ts`
+Run: `cd packages/multiman && bun test test/kernel.test.ts`
 Expected: FAIL — `kernel.materialize` undefined / transition not awaiting.
 
 - [ ] **Step 3: Implement materialize + make transition async with running hook**
@@ -1174,7 +1174,7 @@ private onTaskFailed(_id: string): void {}
 
 - [ ] **Step 4: Run to verify it passes**
 
-Run: `cd packages/multiman && bunx vitest run test/kernel.test.ts`
+Run: `cd packages/multiman && bun test test/kernel.test.ts`
 Expected: PASS (after updating earlier tests to `await`).
 
 - [ ] **Step 5: Commit**
@@ -1242,7 +1242,7 @@ describe("DAG gating", () => {
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `cd packages/multiman && bunx vitest run test/kernel.test.ts`
+Run: `cd packages/multiman && bun test test/kernel.test.ts`
 Expected: FAIL — `kernel.createDag` undefined.
 
 - [ ] **Step 3: Implement createDag + gating**
@@ -1302,7 +1302,7 @@ and `throw new CyclicDagError()`. (require shown inline only to keep the diff lo
 
 - [ ] **Step 4: Run to verify it passes**
 
-Run: `cd packages/multiman && bunx vitest run test/kernel.test.ts`
+Run: `cd packages/multiman && bun test test/kernel.test.ts`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
@@ -1360,7 +1360,7 @@ describe("heartbeat + report", () => {
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `cd packages/multiman && bunx vitest run test/kernel.test.ts`
+Run: `cd packages/multiman && bun test test/kernel.test.ts`
 Expected: FAIL — `heartbeat`/`reportTask` undefined.
 
 - [ ] **Step 3: Implement heartbeat + reportTask**
@@ -1391,7 +1391,7 @@ async reportTask(
 
 - [ ] **Step 4: Run to verify it passes**
 
-Run: `cd packages/multiman && bunx vitest run test/kernel.test.ts`
+Run: `cd packages/multiman && bun test test/kernel.test.ts`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
@@ -1460,7 +1460,7 @@ describe("sweep", () => {
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `cd packages/multiman && bunx vitest run test/kernel.test.ts`
+Run: `cd packages/multiman && bun test test/kernel.test.ts`
 Expected: FAIL — `kernel.sweep` undefined.
 
 - [ ] **Step 3: Implement sweep() + sweeper.ts**
@@ -1520,7 +1520,7 @@ system-initiated recoveries that bypass the role guard but still respect the sta
 
 - [ ] **Step 4: Run to verify it passes**
 
-Run: `cd packages/multiman && bunx vitest run test/kernel.test.ts`
+Run: `cd packages/multiman && bun test test/kernel.test.ts`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
@@ -1544,7 +1544,7 @@ git commit -m "feat(multiman): sweeper for claim timeout + running lease"
 
 ```ts
 // test/rpc.test.ts
-import { describe, it, expect } from "vitest"
+import { describe, it, expect } from "bun:test"
 import { openDb } from "@/db/open"
 import { runMigrations } from "@/db/migrate"
 import { Dao } from "@/db/dao"
@@ -1581,7 +1581,7 @@ describe("rpc handle", () => {
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `cd packages/multiman && bunx vitest run test/rpc.test.ts`
+Run: `cd packages/multiman && bun test test/rpc.test.ts`
 Expected: FAIL — cannot resolve `@/rpc`.
 
 - [ ] **Step 3: Implement rpc.ts**
@@ -1661,7 +1661,7 @@ getDag(id: string) {
 
 - [ ] **Step 4: Run to verify it passes**
 
-Run: `cd packages/multiman && bunx vitest run test/rpc.test.ts`
+Run: `cd packages/multiman && bun test test/rpc.test.ts`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
@@ -1814,7 +1814,7 @@ In `serverApi.close()`: `stopSweeper()` and `mmDb.close()`.
 
 - [ ] **Step 5: Verify kobe typechecks + existing tests still pass**
 
-Run: `cd packages/kobe && bun run typecheck && bunx vitest run test/daemon`
+Run: `cd packages/kobe && bun run typecheck && bun test test/daemon`
 Expected: PASS (or only the new socket test pending in Task 19).
 
 - [ ] **Step 6: Commit**
@@ -1833,7 +1833,7 @@ git commit -m "feat(kobe): mount multiman kernel, dispatch, sweeper, lifetime ke
 
 ```ts
 // test/daemon.socket.test.ts
-import { describe, it, expect } from "vitest"
+import { describe, it, expect } from "bun:test"
 // Start a daemon on a temp socket + temp KOBE_HOME_DIR, connect a KobeDaemonClient,
 // send request("multiman", {method:"task.create", params:{title:"x"}}), assert a Task
 // returns and a "multiman" channel event with kind "task.created" arrives.
@@ -1853,7 +1853,7 @@ the gui disconnects (lifetime, #1).
 
 - [ ] **Step 2: Run the socket suite**
 
-Run: `cd packages/multiman && KOBE_INCLUDE_SOCKET=1 bunx vitest run test/daemon.socket.test.ts`
+Run: `cd packages/multiman && KOBE_INCLUDE_SOCKET=1 bun test test/daemon.socket.test.ts`
 Expected: PASS.
 
 - [ ] **Step 3: Commit**
@@ -1924,7 +1924,7 @@ git commit -m "feat(kobe): kobe multiman CLI subcommand"
 
 - [ ] **Step 1: Run the whole suite**
 
-Run: `cd packages/multiman && bun run test && KOBE_INCLUDE_SOCKET=1 bunx vitest run test/daemon.socket.test.ts`
+Run: `cd packages/multiman && bun run test && KOBE_INCLUDE_SOCKET=1 bun test test/daemon.socket.test.ts`
 Run: `cd packages/kobe && bun run typecheck && bun run lint`
 Expected: all green.
 
