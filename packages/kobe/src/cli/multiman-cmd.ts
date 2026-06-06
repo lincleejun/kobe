@@ -61,6 +61,7 @@ const MULTIMAN_USAGE = [
   "  schedule enable <id> --enabled <true|false>",
   "  schedule run-now <id>",
   "  runner --role <id> [--timeout-ms <n>]   (long-running autonomous role-runner)",
+  "  orchestrator --role <id> [--timeout-ms <n>]   (long-running inbox->DAG decomposer)",
   "",
   "Global: [--pretty] [--help]",
   "",
@@ -368,6 +369,15 @@ export async function runMultimanSubcommand(argv: readonly string[]): Promise<vo
   if (noun === "runner") {
     const { runMultimanRunner } = await import("./multiman-runner-cmd.ts")
     await runMultimanRunner(verb === undefined ? rest : [verb, ...rest])
+    return
+  }
+
+  // `orchestrator` is the long-running inbox→DAG decomposer — like `runner`, it
+  // owns its own daemon lifetime + subscription, so it bypasses the thin
+  // request/emit/close path below.
+  if (noun === "orchestrator") {
+    const { runMultimanOrchestrator } = await import("./multiman-orchestrator-cmd.ts")
+    await runMultimanOrchestrator(verb === undefined ? rest : [verb, ...rest])
     return
   }
 
