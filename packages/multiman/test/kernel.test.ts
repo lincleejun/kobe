@@ -105,3 +105,123 @@ describe("materialize (Finding 1 idempotency)", () => {
     expect(dao.getTask(t.id)?.status).toBe("claimed") // no half-state
   })
 })
+
+describe("DAG gating", () => {
+  it("createDag rejects a cycle (no tasks created)", () => {
+    const { kernel, dao } = makeKernel()
+    expect(() => kernel.createDag(
+      { title: "g" },
+      [{ key: "a", title: "A" }, { key: "b", title: "B" }],
+      [["a", "b"], ["b", "a"]],
+    )).toThrow("cycle")
+    expect(dao.listTasks().length).toBe(0) // transaction rolled back / never started
+  })
+  it("blocks successors until predecessor done, then unblocks", async () => {
+    const { kernel, dao } = makeKernel()
+    const dag = kernel.createDag(
+      { title: "g" },
+      [{ key: "a", title: "A" }, { key: "b", title: "B" }],
+      [["a", "b"]],
+    )
+    const a = dag.tasks["a"]!, b = dag.tasks["b"]!
+    expect(dao.getTask(a)?.status).toBe("pending")
+    expect(dao.getTask(b)?.status).toBe("blocked")
+    // drive A to done (materialize needs a repo)
+    dao.updateTask(a, { repo: "/repo" })
+    const role = dao.createRole({ name: "r", kind: "worker" })
+    await kernel.transition(a, "assigned", "x", { roleId: role.id })
+    kernel.claimNextTask(role.id)
+    await kernel.transition(a, "running", "x")
+    await kernel.transition(a, "done", "x")
+    expect(dao.getTask(b)?.status).toBe("pending") // unblocked
+  })
+  it("onTaskFailed marks dag failed and keeps successors blocked", async () => {
+    const { kernel, dao } = makeKernel()
+    const dag = kernel.createDag({ title: "g" }, [{ key: "a", title: "A" }, { key: "b", title: "B" }], [["a", "b"]])
+    const a = dag.tasks["a"]!, b = dag.tasks["b"]!
+    dao.updateTask(a, { repo: "/repo" })
+    const role = dao.createRole({ name: "r", kind: "worker" })
+    await kernel.transition(a, "assigned", "x", { roleId: role.id })
+    kernel.claimNextTask(role.id)
+    await kernel.transition(a, "running", "x")
+    await kernel.transition(a, "failed", "x")
+    expect(dao.getTask(b)?.status).toBe("blocked")
+    expect(dao.raw().query("SELECT status FROM dag WHERE id=?").get(dag.dag.id)).toMatchObject({ status: "failed" })
+  })
+})
+
+describe("heartbeat + report", () => {
+  it("heartbeat renews last_heartbeat_at for a running task", async () => {
+    let clock = "2026-06-05T00:00:00.000Z"
+    const { kernel, dao } = makeKernel(() => clock)
+    const role = dao.createRole({ name: "r", kind: "worker" })
+    const t = kernel.createTask({ title: "x", role_id: role.id, repo: "/repo" })
+    await kernel.transition(t.id, "assigned", "a", { roleId: role.id })
+    kernel.claimNextTask(role.id)
+    await kernel.transition(t.id, "running", "x")
+    clock = "2026-06-05T00:05:00.000Z"
+    kernel.heartbeat(t.id, role.id)
+    expect(dao.getTask(t.id)?.last_heartbeat_at).toBe(clock)
+  })
+  it("heartbeat rejects when caller is not the claimer", async () => {
+    const { kernel, dao } = makeKernel()
+    const role = dao.createRole({ name: "r", kind: "worker" })
+    const t = kernel.createTask({ title: "x", role_id: role.id, repo: "/repo" })
+    await kernel.transition(t.id, "assigned", "a", { roleId: role.id })
+    kernel.claimNextTask(role.id)
+    await kernel.transition(t.id, "running", "x")
+    expect(() => kernel.heartbeat(t.id, "someone-else")).toThrow()
+  })
+  it("reportTask sets terminal status + result", async () => {
+    const { kernel, dao } = makeKernel()
+    const role = dao.createRole({ name: "r", kind: "worker" })
+    const t = kernel.createTask({ title: "x", role_id: role.id, repo: "/repo" })
+    await kernel.transition(t.id, "assigned", "a", { roleId: role.id })
+    kernel.claimNextTask(role.id)
+    await kernel.transition(t.id, "running", "x")
+    await kernel.reportTask(t.id, { status: "in_review", result: "done-ish" })
+    expect(dao.getTask(t.id)?.status).toBe("in_review")
+    expect(dao.getTask(t.id)?.result).toBe("done-ish")
+  })
+})
+
+describe("sweep", () => {
+  it("reclaims a stale claimed task back to assigned", async () => {
+    let clock = "2026-06-05T00:00:00.000Z"
+    const { kernel, dao } = makeKernel(() => clock)
+    const role = dao.createRole({ name: "r", kind: "worker" })
+    const t = kernel.createTask({ title: "x", role_id: role.id })
+    await kernel.transition(t.id, "assigned", "a", { roleId: role.id })
+    kernel.claimNextTask(role.id) // claimed_at = 00:00
+    clock = "2026-06-05T00:10:00.000Z" // +10min > 90s recovery
+    kernel.sweep()
+    expect(dao.getTask(t.id)?.status).toBe("assigned")
+  })
+  it("reclaims a lease-expired running task to assigned and increments retry", async () => {
+    let clock = "2026-06-05T00:00:00.000Z"
+    const { kernel, dao } = makeKernel(() => clock)
+    const role = dao.createRole({ name: "r", kind: "worker" })
+    const t = kernel.createTask({ title: "x", role_id: role.id, repo: "/repo" })
+    await kernel.transition(t.id, "assigned", "a", { roleId: role.id })
+    kernel.claimNextTask(role.id)
+    await kernel.transition(t.id, "running", "x") // heartbeat = 00:00
+    clock = "2026-06-05T00:10:00.000Z" // +10min > 60s lease
+    kernel.sweep()
+    const after = dao.getTask(t.id)
+    expect(after?.status).toBe("assigned")
+    expect(after?.retry_count).toBe(1)
+  })
+  it("fails a running task after maxRetry exhausted", async () => {
+    let clock = "2026-06-05T00:00:00.000Z"
+    const { kernel, dao } = makeKernel(() => clock)
+    const role = dao.createRole({ name: "r", kind: "worker" })
+    const t = kernel.createTask({ title: "x", role_id: role.id, repo: "/repo" })
+    dao.updateTask(t.id, { retry_count: 2 }) // already at maxRetry
+    await kernel.transition(t.id, "assigned", "a", { roleId: role.id })
+    kernel.claimNextTask(role.id)
+    await kernel.transition(t.id, "running", "x")
+    clock = "2026-06-05T00:10:00.000Z"
+    kernel.sweep()
+    expect(dao.getTask(t.id)?.status).toBe("failed")
+  })
+})

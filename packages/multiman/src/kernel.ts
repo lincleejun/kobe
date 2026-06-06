@@ -1,8 +1,9 @@
 // src/kernel.ts
 import type { Dao } from "@/db/dao"
-import type { Task, TaskStatus } from "@/types"
+import type { Dag, Task, TaskStatus } from "@/types"
 import { assertTransition } from "@/state-machine"
-import { GuardError } from "@/errors"
+import { hasCycle } from "@/dag"
+import { CyclicDagError, GuardError } from "@/errors"
 
 export interface KobeOrchestratorPort {
   adoptWorktree(input: {
@@ -113,7 +114,108 @@ export class MultimanKernel {
     return { kobeTaskId: res.id, worktreePath: res.worktreePath }
   }
 
-  // Filled in the next task (DAG gating). No-ops here.
-  private onTaskDone(_id: string): void {}
-  private onTaskFailed(_id: string): void {}
+  createDag(
+    info: { title?: string; source_inbox_item_id?: string | null; orchestrator_role_id?: string | null },
+    tasks: { key: string; title: string; body?: string; role_id?: string | null; repo?: string | null; priority?: number }[],
+    edges: [string, string][], // [fromKey, toKey]
+  ): { dag: Dag; tasks: Record<string, string> } {
+    const keys = tasks.map((t) => t.key)
+    // Cycle check happens BEFORE any DB write — never start a transaction on a cyclic graph.
+    if (hasCycle(keys, edges)) throw new CyclicDagError()
+    return this.dao.transaction(() => {
+      const dag = this.dao.createDagRow(info)
+      const keyToId: Record<string, string> = {}
+      const hasPred = new Set(edges.map(([, to]) => to))
+      for (const spec of tasks) {
+        const created = this.dao.createTask({
+          title: spec.title, body: spec.body, role_id: spec.role_id ?? null,
+          repo: spec.repo ?? null, priority: spec.priority ?? 0, dag_id: dag.id,
+          source_kind: "orchestrator", source_ref: dag.id,
+          status: hasPred.has(spec.key) ? "blocked" : "pending",
+        })
+        keyToId[spec.key] = created.id
+      }
+      for (const [from, to] of edges) {
+        const fromId = keyToId[from], toId = keyToId[to]
+        if (!fromId || !toId) throw new GuardError(`edge references unknown task key: ${from} -> ${to}`)
+        this.dao.addEdge(dag.id, fromId, toId)
+      }
+      return { dag, tasks: keyToId }
+    })
+  }
+
+  heartbeat(taskId: string, roleId: string): void {
+    const t = this.dao.getTask(taskId)
+    if (!t) throw new GuardError(`task not found: ${taskId}`)
+    if (t.status !== "running") throw new GuardError(`task not running: ${taskId}`)
+    if (t.claimed_by !== roleId) throw new GuardError(`heartbeat from non-claimer: ${roleId}`)
+    this.dao.updateTask(taskId, { last_heartbeat_at: this.now() })
+  }
+
+  async reportTask(
+    id: string,
+    r: { status: TaskStatus; result?: string; error?: string; sessionId?: string },
+  ): Promise<Task> {
+    if (r.result !== undefined || r.error !== undefined || r.sessionId !== undefined) {
+      this.dao.updateTask(id, {
+        ...(r.result !== undefined ? { result: r.result } : {}),
+        ...(r.error !== undefined ? { error: r.error } : {}),
+        ...(r.sessionId !== undefined ? { session_id: r.sessionId } : {}),
+      })
+    }
+    return this.transition(id, r.status, "report")
+  }
+
+  // System-initiated recoveries. These bypass the role guard (no transition()) but
+  // still respect the state graph: claimed->assigned, running->assigned|failed are
+  // all legal edges. Uses the injected clock (this.now), never real timers.
+  sweep(): void {
+    const nowMs = Date.parse(this.now())
+    // claimed timeout -> assigned
+    for (const t of this.dao.listTasks({ status: "claimed" })) {
+      if (t.claimed_at && nowMs - Date.parse(t.claimed_at) > this.recoveryWindowMs) {
+        this.dao.updateTask(t.id, { status: "assigned" })
+        this.dao.logEvent({ actor_kind: "system", actor_id: null, action: "task.sweep.claim_timeout", target_kind: "task", target_id: t.id, details: "{}" })
+        this.publish("task.transitioned", this.dao.getTask(t.id))
+      }
+    }
+    // running lease expiry -> assigned (retry) or failed
+    for (const t of this.dao.listTasks({ status: "running" })) {
+      const hb = t.last_heartbeat_at ?? t.claimed_at
+      if (hb && nowMs - Date.parse(hb) > this.leaseWindowMs) {
+        if (t.retry_count < this.maxRetry) {
+          this.dao.updateTask(t.id, { status: "assigned", retry_count: t.retry_count + 1, last_heartbeat_at: null })
+          this.dao.logEvent({ actor_kind: "system", actor_id: null, action: "task.sweep.lease_retry", target_kind: "task", target_id: t.id, details: JSON.stringify({ retry: t.retry_count + 1 }) })
+        } else {
+          this.dao.updateTask(t.id, { status: "failed", error: "lease expired, max retries" })
+          this.dao.logEvent({ actor_kind: "system", actor_id: null, action: "task.sweep.lease_failed", target_kind: "task", target_id: t.id, details: "{}" })
+          this.onTaskFailed(t.id)
+        }
+        this.publish("task.transitioned", this.dao.getTask(t.id))
+      }
+    }
+  }
+
+  // Unblock successors whose ALL predecessors are done -> assigned (if it has a
+  // role) or pending. Only blocked successors are eligible.
+  private onTaskDone(taskId: string): void {
+    for (const succ of this.dao.successorsOf(taskId)) {
+      const s = this.dao.getTask(succ)
+      if (!s || s.status !== "blocked") continue
+      const allDone = this.dao.predecessorsOf(succ)
+        .every((p) => this.dao.getTask(p)?.status === "done")
+      if (allDone) {
+        const to = s.role_id ? "assigned" : "pending"
+        this.dao.updateTask(succ, { status: to })
+        this.publish("task.transitioned", this.dao.getTask(succ))
+      }
+    }
+  }
+
+  // A failed task marks its dag failed; successors intentionally stay blocked for
+  // human/orchestrator triage.
+  private onTaskFailed(taskId: string): void {
+    const t = this.dao.getTask(taskId)
+    if (t?.dag_id) this.dao.setDagStatus(t.dag_id, "failed")
+  }
 }
