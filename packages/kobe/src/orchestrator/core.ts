@@ -24,6 +24,7 @@
 
 import { realpathSync } from "node:fs"
 import { basename, resolve } from "node:path"
+import type { Role as MultimanRole, Task as MultimanTask } from "@sma1lboy/multiman/types"
 import type { Accessor } from "solid-js"
 import { createSignal } from "solid-js"
 import type { Task, TaskId, TaskStatus, VendorId } from "../types/task.ts"
@@ -67,6 +68,14 @@ export interface OrchestratorDeps {
  * Placeholder title for tasks created before the user picks one.
  */
 export const PLACEHOLDER_TASK_TITLE = "(new task)"
+
+/**
+ * Stable empty accessors for the local (no-daemon) Orchestrator's multiman
+ * signals. Constants (not per-call factories) so the kanban board's
+ * `createMemo` sees a stable reference and never re-runs needlessly.
+ */
+const EMPTY_MULTIMAN_TASKS: Accessor<MultimanTask[]> = () => []
+const EMPTY_MULTIMAN_ROLES: Accessor<MultimanRole[]> = () => []
 
 /**
  * Owner of the task lifecycle.
@@ -141,6 +150,22 @@ export class Orchestrator {
   /** Solid signal of the current task list. */
   tasksSignal(): Accessor<Task[]> {
     return this.tasksAcc
+  }
+
+  /**
+   * Multiman kernel tasks/roles — only populated by {@link RemoteOrchestrator}
+   * (the daemon mounts the kernel). In local (no-daemon) mode there is no
+   * kernel, so these return permanently-empty signals; they exist only to keep
+   * the `KobeOrchestrator` union's API uniform so the TUI's kanban board can
+   * mount unconditionally and simply show nothing here.
+   */
+  multimanTasksSignal(): Accessor<MultimanTask[]> {
+    return EMPTY_MULTIMAN_TASKS
+  }
+
+  /** See {@link multimanTasksSignal}. */
+  multimanRolesSignal(): Accessor<MultimanRole[]> {
+    return EMPTY_MULTIMAN_ROLES
   }
 
   /**

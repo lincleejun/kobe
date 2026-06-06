@@ -9,6 +9,7 @@
  * longer brokers any of that.
  */
 
+import type { Role as MultimanRole, Task as MultimanTask } from "@sma1lboy/multiman/types"
 import { type Accessor, createEffect, createRoot, createSignal } from "solid-js"
 import {
   DAEMON_PROTOCOL_VERSION,
@@ -74,6 +75,12 @@ export class RemoteOrchestrator {
   private readonly setEngineStateSig: (next: ReadonlyMap<string, TaskEngineState>) => void
   private readonly connectionStateAcc: Accessor<DaemonConnectionState>
   private readonly setConnectionState: (next: DaemonConnectionState) => void
+  private readonly multimanTasksAcc: Accessor<MultimanTask[]>
+  private readonly setMultimanTasksSig: (next: MultimanTask[]) => void
+  private readonly multimanRolesAcc: Accessor<MultimanRole[]>
+  private readonly setMultimanRolesSig: (next: MultimanRole[]) => void
+  /** Debounce handle for `multiman`-channel-driven re-fetches. */
+  private multimanRefreshTimer: ReturnType<typeof setTimeout> | null = null
   private readonly ensureReachable: () => Promise<unknown>
   private readonly role: SubscribeRole
   /** Guards against stacking multiple reconnect loops (one `close` already
@@ -90,6 +97,8 @@ export class RemoteOrchestrator {
     const [daemonVersion, setDaemonVersion] = createSignal<string | null>(null)
     const [engineState, setEngineState] = createSignal<ReadonlyMap<string, TaskEngineState>>(new Map())
     const [connectionState, setConnectionState] = createSignal<DaemonConnectionState>("online")
+    const [multimanTasks, setMultimanTasks] = createSignal<MultimanTask[]>([])
+    const [multimanRoles, setMultimanRoles] = createSignal<MultimanRole[]>([])
     this.tasksAcc = tasks
     this.setTasks = (next) => setTasks(() => next)
     this.activeTaskAcc = activeTask
@@ -102,8 +111,17 @@ export class RemoteOrchestrator {
     this.setEngineStateSig = (next) => setEngineState(() => next)
     this.connectionStateAcc = connectionState
     this.setConnectionState = (next) => setConnectionState(() => next)
+    this.multimanTasksAcc = multimanTasks
+    this.setMultimanTasksSig = (next) => setMultimanTasks(() => next)
+    this.multimanRolesAcc = multimanRoles
+    this.setMultimanRolesSig = (next) => setMultimanRoles(() => next)
     this.ensureReachable = options.ensureReachable ?? ensureDaemonReachable
     this.role = options.role ?? "pane"
+    // The `*` handler fans every channel event into handleEvent, which routes
+    // `task.snapshot` / `active-task` / `update` / `engine-state` AND the
+    // `multiman` kernel-mutation channel (→ a debounced task/role re-fetch).
+    // Routing multiman here rather than via a separate `onChannel` keeps the
+    // single subscription path the fake test client mocks (`on("*")`).
     this.client.on("*", (frame) => this.handleEvent(frame.name, frame.payload))
     // Socket drop flips us to `disconnected`. What happens next depends on
     // the role:
@@ -218,6 +236,49 @@ export class RemoteOrchestrator {
     await this.client.subscribe({ role: this.role })
     this.setConnectionState("online")
     logClient("orch", `subscribed as ${this.role} (${this.tasksAcc().length} tasks)`)
+    // Prime the multiman board's data once the snapshot stream is live. Fire
+    // and forget — a daemon without the multiman kernel just leaves the lists
+    // empty (refreshMultiman swallows the error), never blocking init().
+    void this.refreshMultiman()
+  }
+
+  /**
+   * Re-fetch the multiman kernel's task + role lists via the daemon's
+   * `multiman` passthrough request (JSON-RPC tunnelled to the in-process
+   * kernel). Defensive: an older daemon without the kernel — or any transport
+   * error — leaves the last-known lists in place and logs, never crashing the
+   * TUI. Drives the kanban board.
+   */
+  async refreshMultiman(): Promise<void> {
+    try {
+      const tasksRes = await this.client.request<{ tasks?: MultimanTask[] } | MultimanTask[]>("multiman", {
+        method: "task.list",
+        params: {},
+      })
+      const tasks = Array.isArray(tasksRes) ? tasksRes : (tasksRes?.tasks ?? [])
+      if (Array.isArray(tasks)) this.setMultimanTasksSig(tasks)
+    } catch (err) {
+      logClientError("multiman-task-list", err)
+    }
+    try {
+      const rolesRes = await this.client.request<{ roles?: MultimanRole[] } | MultimanRole[]>("multiman", {
+        method: "role.list",
+        params: {},
+      })
+      const roles = Array.isArray(rolesRes) ? rolesRes : (rolesRes?.roles ?? [])
+      if (Array.isArray(roles)) this.setMultimanRolesSig(roles)
+    } catch (err) {
+      logClientError("multiman-role-list", err)
+    }
+  }
+
+  /** Debounce multiman re-fetches so a burst of kernel events → one round-trip. */
+  private scheduleMultimanRefresh(): void {
+    if (this.multimanRefreshTimer) clearTimeout(this.multimanRefreshTimer)
+    this.multimanRefreshTimer = setTimeout(() => {
+      this.multimanRefreshTimer = null
+      void this.refreshMultiman()
+    }, 250)
   }
 
   connectionStateSignal(): Accessor<DaemonConnectionState> {
@@ -296,6 +357,21 @@ export class RemoteOrchestrator {
    */
   engineStateSignal(): Accessor<ReadonlyMap<string, TaskEngineState>> {
     return this.engineStateAcc
+  }
+
+  /**
+   * Live multiman kernel tasks for the kanban board. Hydrated by
+   * {@link refreshMultiman} on init + debounced on every `multiman` channel
+   * event. Empty until the first fetch resolves (or permanently empty against
+   * a daemon without the multiman kernel).
+   */
+  multimanTasksSignal(): Accessor<MultimanTask[]> {
+    return this.multimanTasksAcc
+  }
+
+  /** Live multiman roles, used to resolve a task's `role_id` → role name. */
+  multimanRolesSignal(): Accessor<MultimanRole[]> {
+    return this.multimanRolesAcc
   }
 
   listTasks(): Task[] {
@@ -421,6 +497,14 @@ export class RemoteOrchestrator {
     if (name === "task.snapshot") {
       const value = (payload as { tasks?: SerializedTask[] } | undefined)?.tasks
       if (Array.isArray(value)) this.setTasks(value.map(deserializeTask))
+      return
+    }
+    if (name === "multiman") {
+      // The multiman channel broadcasts `{kind, payload}` on EVERY kernel
+      // mutation — NOT a task snapshot, so we can't fold the payload into a
+      // signal. Re-fetch the full task/role lists instead, debounced so a
+      // burst of mutations collapses into one round-trip (kanban board).
+      this.scheduleMultimanRefresh()
       return
     }
     if (name === "active-task") {

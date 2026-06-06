@@ -56,6 +56,7 @@ import { usePaneSizes } from "./lib/use-pane-sizes"
 import { useThemePersistence } from "./lib/use-theme-persistence"
 import { CostDashboard } from "./panes/monitor/CostDashboard"
 import { LivePreview } from "./panes/monitor/LivePreview"
+import { MultimanBoard } from "./panes/multiman-board/MultimanBoard"
 import { Sidebar } from "./panes/sidebar/Sidebar"
 import { ClaudeLauncher, type LaunchTaskTmuxResult, launchTaskTmux } from "./panes/terminal/fullscreen"
 import { killSession, switchClientBeforeKill, tmuxSessionName } from "./panes/terminal/tmux"
@@ -79,6 +80,13 @@ function Shell(props: AppDeps) {
   useThemePersistence(themeCtx, kv)
 
   const tasksAcc: Accessor<ReturnType<typeof props.orchestrator.listTasks>> = props.orchestrator.tasksSignal()
+
+  // Live multiman kernel data for the top kanban board. Both signals are part
+  // of the KobeOrchestrator union API — the RemoteOrchestrator hydrates them
+  // from the daemon's multiman kernel; the local (no-daemon) Orchestrator
+  // returns permanently-empty signals so the board mounts unconditionally.
+  const multimanTasks = props.orchestrator.multimanTasksSignal()
+  const multimanRoles = props.orchestrator.multimanRolesSignal()
 
   const persistedSelectedId = kv.get("lastSelectedTaskId") as string | null | undefined
   const [selectedId, setSelectedId] = createSignal<string | null>(persistedSelectedId ?? null)
@@ -499,6 +507,12 @@ function Shell(props: AppDeps) {
   return (
     <box flexDirection="column" flexGrow={1}>
       <TopBar orchestrator={props.orchestrator} activeTask={activeTask} updateInfo={updateInfo} />
+      {/* Full-width multiman kanban board, pinned at the top above the
+          sidebar/workspace row. Fixed height + flexShrink={0} so it never
+          eats the workspace below; passive (no focus/keybindings). */}
+      <box flexShrink={0} height={14} flexDirection="column">
+        <MultimanBoard tasks={multimanTasks} roles={multimanRoles} />
+      </box>
       <box flexDirection="row" flexGrow={1}>
         {/* Sidebar — task list, status badges, search. The Sidebar
             renders its own `h TASKS` header internally, so we don't
