@@ -1,7 +1,7 @@
 // test/state-machine.test.ts
-import { describe, it, expect } from "bun:test"
-import { canTransition, assertTransition } from "@/state-machine"
+import { describe, expect, it } from "bun:test"
 import { InvalidTransitionError } from "@/errors"
+import { assertTransition, canTransition } from "@/state-machine"
 
 describe("state machine", () => {
   it("allows the core happy path", () => {

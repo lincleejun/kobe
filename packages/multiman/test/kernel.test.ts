@@ -1,10 +1,10 @@
 // test/kernel.test.ts
-import { describe, it, expect } from "bun:test"
-import { openDb } from "@/db/open"
-import { runMigrations } from "@/db/migrate"
+import { describe, expect, it } from "bun:test"
 import { Dao } from "@/db/dao"
-import { MultimanKernel } from "@/kernel"
+import { runMigrations } from "@/db/migrate"
+import { openDb } from "@/db/open"
 import { GuardError, InvalidTransitionError } from "@/errors"
+import { MultimanKernel } from "@/kernel"
 
 function fakeOrchestrator() {
   const calls: { adopt: number; create: number } = { adopt: 0, create: 0 }
@@ -14,20 +14,28 @@ function fakeOrchestrator() {
       calls.adopt++
       return { id: `kobe-${input.branch}`, worktreePath: input.worktreePath }
     },
-    async createTask() { calls.create++; throw new Error("createTask must not be used") },
+    async createTask() {
+      calls.create++
+      throw new Error("createTask must not be used")
+    },
   }
 }
 
 function makeKernel(now = () => "2026-06-05T00:00:00.000Z") {
-  const db = openDb(":memory:"); runMigrations(db)
+  const db = openDb(":memory:")
+  runMigrations(db)
   let n = 0
   const dao = new Dao(db, now, () => `id-${++n}`)
   const events: { kind: string; payload: unknown }[] = []
   const orch = fakeOrchestrator()
   const kernel = new MultimanKernel({
-    dao, orchestrator: orch, now,
+    dao,
+    orchestrator: orch,
+    now,
     publish: (kind, payload) => events.push({ kind, payload }),
-    recoveryWindowMs: 90_000, leaseWindowMs: 60_000, maxRetry: 2,
+    recoveryWindowMs: 90_000,
+    leaseWindowMs: 60_000,
+    maxRetry: 2,
   })
   return { kernel, dao, events, orch }
 }
@@ -65,9 +73,9 @@ describe("claimNextTask", () => {
     const first = kernel.claimNextTask(role.id)
     const second = kernel.claimNextTask(role.id)
     const third = kernel.claimNextTask(role.id)
-    expect(first?.id).toBe(hi.id)   // priority wins
+    expect(first?.id).toBe(hi.id) // priority wins
     expect(second?.id).toBe(lo.id)
-    expect(third).toBeNull()        // nothing left
+    expect(third).toBeNull() // nothing left
     expect(first?.status).toBe("claimed")
     expect(first?.claimed_by).toBe(role.id)
   })
@@ -100,7 +108,9 @@ describe("materialize (Finding 1 idempotency)", () => {
     await kernel.transition(t.id, "assigned", "a", { roleId: role.id })
     kernel.claimNextTask(role.id)
     // monkeypatch orchestrator to throw
-    ;(kernel as any).orch.adoptWorktree = async () => { throw new Error("git boom") }
+    ;(kernel as any).orch.adoptWorktree = async () => {
+      throw new Error("git boom")
+    }
     await expect(kernel.transition(t.id, "running", "start")).rejects.toThrow("git boom")
     expect(dao.getTask(t.id)?.status).toBe("claimed") // no half-state
   })
@@ -109,21 +119,33 @@ describe("materialize (Finding 1 idempotency)", () => {
 describe("DAG gating", () => {
   it("createDag rejects a cycle (no tasks created)", () => {
     const { kernel, dao } = makeKernel()
-    expect(() => kernel.createDag(
-      { title: "g" },
-      [{ key: "a", title: "A" }, { key: "b", title: "B" }],
-      [["a", "b"], ["b", "a"]],
-    )).toThrow("cycle")
+    expect(() =>
+      kernel.createDag(
+        { title: "g" },
+        [
+          { key: "a", title: "A" },
+          { key: "b", title: "B" },
+        ],
+        [
+          ["a", "b"],
+          ["b", "a"],
+        ],
+      ),
+    ).toThrow("cycle")
     expect(dao.listTasks().length).toBe(0) // transaction rolled back / never started
   })
   it("blocks successors until predecessor done, then unblocks", async () => {
     const { kernel, dao } = makeKernel()
     const dag = kernel.createDag(
       { title: "g" },
-      [{ key: "a", title: "A" }, { key: "b", title: "B" }],
+      [
+        { key: "a", title: "A" },
+        { key: "b", title: "B" },
+      ],
       [["a", "b"]],
     )
-    const a = dag.tasks["a"]!, b = dag.tasks["b"]!
+    const a = dag.tasks.a!
+    const b = dag.tasks.b!
     expect(dao.getTask(a)?.status).toBe("pending")
     expect(dao.getTask(b)?.status).toBe("blocked")
     // drive A to done (materialize needs a repo)
@@ -137,8 +159,16 @@ describe("DAG gating", () => {
   })
   it("onTaskFailed marks dag failed and keeps successors blocked", async () => {
     const { kernel, dao } = makeKernel()
-    const dag = kernel.createDag({ title: "g" }, [{ key: "a", title: "A" }, { key: "b", title: "B" }], [["a", "b"]])
-    const a = dag.tasks["a"]!, b = dag.tasks["b"]!
+    const dag = kernel.createDag(
+      { title: "g" },
+      [
+        { key: "a", title: "A" },
+        { key: "b", title: "B" },
+      ],
+      [["a", "b"]],
+    )
+    const a = dag.tasks.a!
+    const b = dag.tasks.b!
     dao.updateTask(a, { repo: "/repo" })
     const role = dao.createRole({ name: "r", kind: "worker" })
     await kernel.transition(a, "assigned", "x", { roleId: role.id })

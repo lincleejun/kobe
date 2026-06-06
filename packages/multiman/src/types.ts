@@ -1,8 +1,15 @@
 // Enum single source of truth. SQL CHECK constraints in 001_init.sql must match
 // these arrays exactly; enum-sync.test.ts asserts that.
 export const TASK_STATUSES = [
-  "pending", "assigned", "claimed", "running",
-  "blocked", "in_review", "done", "failed", "cancelled",
+  "pending",
+  "assigned",
+  "claimed",
+  "running",
+  "blocked",
+  "in_review",
+  "done",
+  "failed",
+  "cancelled",
 ] as const
 export type TaskStatus = (typeof TASK_STATUSES)[number]
 

@@ -1,17 +1,31 @@
 // test/rpc.test.ts
-import { describe, it, expect } from "bun:test"
-import { openDb } from "@/db/open"
-import { runMigrations } from "@/db/migrate"
+import { describe, expect, it } from "bun:test"
 import { Dao } from "@/db/dao"
+import { runMigrations } from "@/db/migrate"
+import { openDb } from "@/db/open"
 import { MultimanKernel } from "@/kernel"
 import { makeRpcHandler } from "@/rpc"
 
 function makeHandler() {
-  const db = openDb(":memory:"); runMigrations(db)
+  const db = openDb(":memory:")
+  runMigrations(db)
   let n = 0
-  const dao = new Dao(db, () => "2026-06-05T00:00:00.000Z", () => `id-${++n}`)
-  const orch = { async adoptWorktree(i: any) { return { id: `kobe-${i.branch}`, worktreePath: i.worktreePath } } }
-  const kernel = new MultimanKernel({ dao, orchestrator: orch as any, now: () => "2026-06-05T00:00:00.000Z", publish: () => {} })
+  const dao = new Dao(
+    db,
+    () => "2026-06-05T00:00:00.000Z",
+    () => `id-${++n}`,
+  )
+  const orch = {
+    async adoptWorktree(i: any) {
+      return { id: `kobe-${i.branch}`, worktreePath: i.worktreePath }
+    },
+  }
+  const kernel = new MultimanKernel({
+    dao,
+    orchestrator: orch as any,
+    now: () => "2026-06-05T00:00:00.000Z",
+    publish: () => {},
+  })
   return makeRpcHandler(kernel)
 }
 

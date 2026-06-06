@@ -1,6 +1,6 @@
-import { describe, it, expect } from "bun:test"
-import { openDb } from "@/db/open"
+import { describe, expect, it } from "bun:test"
 import { runMigrations } from "@/db/migrate"
+import { openDb } from "@/db/open"
 
 describe("openDb", () => {
   it("enables WAL and foreign_keys", () => {
@@ -20,9 +20,9 @@ describe("runMigrations", () => {
     runMigrations(db)
     const v = db.query("PRAGMA user_version").get() as { user_version: number }
     expect(v.user_version).toBe(1)
-    const tables = db.query(
-      "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
-    ).all() as { name: string }[]
+    const tables = db.query("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all() as {
+      name: string
+    }[]
     const names = tables.map((t) => t.name)
     expect(names).toContain("task")
     expect(names).toContain("role")

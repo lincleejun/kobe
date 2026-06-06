@@ -1,13 +1,20 @@
 // test/dao.test.ts
-import { describe, it, expect } from "bun:test"
-import { openDb } from "@/db/open"
-import { runMigrations } from "@/db/migrate"
+import { describe, expect, it } from "bun:test"
 import { Dao } from "@/db/dao"
+import { runMigrations } from "@/db/migrate"
+import { openDb } from "@/db/open"
 
 function freshDao() {
   const db = openDb(":memory:")
   runMigrations(db)
-  return new Dao(db, () => "2026-06-05T00:00:00.000Z", (() => { let n = 0; return () => `id-${++n}` })())
+  return new Dao(
+    db,
+    () => "2026-06-05T00:00:00.000Z",
+    (() => {
+      let n = 0
+      return () => `id-${++n}`
+    })(),
+  )
 }
 
 describe("Dao role + task CRUD", () => {

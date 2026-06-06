@@ -1,7 +1,10 @@
 import type { Database } from "bun:sqlite"
 import { INIT_SQL } from "./migrations/001_init"
 
-interface Migration { version: number; sql: string }
+interface Migration {
+  version: number
+  sql: string
+}
 const MIGRATIONS: Migration[] = [{ version: 1, sql: INIT_SQL }]
 
 export function runMigrations(db: Database): void {

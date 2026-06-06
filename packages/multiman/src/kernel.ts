@@ -1,13 +1,16 @@
+import { hasCycle } from "./dag"
 // src/kernel.ts
 import type { Dao } from "./db/dao"
-import type { Dag, DagEdge, Role, RoleKind, Task, TaskStatus } from "./types"
-import { assertTransition } from "./state-machine"
-import { hasCycle } from "./dag"
 import { CyclicDagError, GuardError } from "./errors"
+import { assertTransition } from "./state-machine"
+import type { Dag, DagEdge, Role, RoleKind, Task, TaskStatus } from "./types"
 
 export interface KobeOrchestratorPort {
   adoptWorktree(input: {
-    repo: string; worktreePath: string; branch: string; ifExists: "return"
+    repo: string
+    worktreePath: string
+    branch: string
+    ifExists: "return"
   }): Promise<{ id: string; worktreePath: string }>
 }
 
@@ -45,12 +48,23 @@ export class MultimanKernel {
 
   createTask(i: Parameters<Dao["createTask"]>[0]): Task {
     const t = this.dao.createTask(i)
-    this.dao.logEvent({ actor_kind: "system", actor_id: null, action: "task.create", target_kind: "task", target_id: t.id, details: "{}" })
+    this.dao.logEvent({
+      actor_kind: "system",
+      actor_id: null,
+      action: "task.create",
+      target_kind: "task",
+      target_id: t.id,
+      details: "{}",
+    })
     this.publish("task.created", t)
     return t
   }
-  getTask(id: string): Task | undefined { return this.dao.getTask(id) }
-  listTasks(f?: Parameters<Dao["listTasks"]>[0]): Task[] { return this.dao.listTasks(f) }
+  getTask(id: string): Task | undefined {
+    return this.dao.getTask(id)
+  }
+  listTasks(f?: Parameters<Dao["listTasks"]>[0]): Task[] {
+    return this.dao.listTasks(f)
+  }
 
   // Thin pass-throughs for the RPC layer (rpc.ts must not reach into dao directly).
   createRoleViaDao(name: string, kind: RoleKind, instructions?: string, vendor?: string, model?: string): Role {
@@ -58,8 +72,12 @@ export class MultimanKernel {
     this.publish("role.created", r)
     return r
   }
-  getRole(id: string): Role | undefined { return this.dao.getRole(id) }
-  listRoles(): Role[] { return this.dao.listRoles() }
+  getRole(id: string): Role | undefined {
+    return this.dao.getRole(id)
+  }
+  listRoles(): Role[] {
+    return this.dao.listRoles()
+  }
   getDag(id: string): { dag: Dag | undefined; tasks: Task[]; edges: DagEdge[] } {
     return {
       dag: this.dao.raw().query("SELECT * FROM dag WHERE id=?").get(id) as Dag | undefined,
@@ -92,7 +110,14 @@ export class MultimanKernel {
     if (to === "assigned" && opts.roleId) patch.role_id = opts.roleId
     if (to === "running") patch.last_heartbeat_at = this.now()
     const updated = this.dao.updateTask(id, patch)
-    this.dao.logEvent({ actor_kind: "system", actor_id: null, action: "task.transition", target_kind: "task", target_id: id, details: JSON.stringify({ from: t.status, to, reason }) })
+    this.dao.logEvent({
+      actor_kind: "system",
+      actor_id: null,
+      action: "task.transition",
+      target_kind: "task",
+      target_id: id,
+      details: JSON.stringify({ from: t.status, to, reason }),
+    })
     this.publish("task.transitioned", updated)
 
     if (to === "done") this.onTaskDone(id)
@@ -104,16 +129,26 @@ export class MultimanKernel {
     const ts = this.now()
     // Single statement; atomicity relies on the single-writer invariant above.
     // RETURNING needs SQLite >= 3.35 (bun bundles a recent build).
-    const row = this.dao.raw().query(
-      `UPDATE task SET status='claimed', claimed_by=?, claimed_at=?, updated_at=?
+    const row = this.dao
+      .raw()
+      .query(
+        `UPDATE task SET status='claimed', claimed_by=?, claimed_at=?, updated_at=?
          WHERE id = (
            SELECT id FROM task
             WHERE status='assigned' AND role_id=?
             ORDER BY priority DESC, created_at ASC LIMIT 1)
-       RETURNING *`
-    ).get(roleId, ts, ts, roleId) as Task | undefined
+       RETURNING *`,
+      )
+      .get(roleId, ts, ts, roleId) as Task | undefined
     if (!row) return null
-    this.dao.logEvent({ actor_kind: "role", actor_id: roleId, action: "task.claim", target_kind: "task", target_id: row.id, details: "{}" })
+    this.dao.logEvent({
+      actor_kind: "role",
+      actor_id: roleId,
+      action: "task.claim",
+      target_kind: "task",
+      target_id: row.id,
+      details: "{}",
+    })
     this.publish("task.claimed", row)
     return row
   }
@@ -132,7 +167,14 @@ export class MultimanKernel {
 
   createDag(
     info: { title?: string; source_inbox_item_id?: string | null; orchestrator_role_id?: string | null },
-    tasks: { key: string; title: string; body?: string; role_id?: string | null; repo?: string | null; priority?: number }[],
+    tasks: {
+      key: string
+      title: string
+      body?: string
+      role_id?: string | null
+      repo?: string | null
+      priority?: number
+    }[],
     edges: [string, string][], // [fromKey, toKey]
   ): { dag: Dag; tasks: Record<string, string> } {
     const keys = tasks.map((t) => t.key)
@@ -144,15 +186,21 @@ export class MultimanKernel {
       const hasPred = new Set(edges.map(([, to]) => to))
       for (const spec of tasks) {
         const created = this.dao.createTask({
-          title: spec.title, body: spec.body, role_id: spec.role_id ?? null,
-          repo: spec.repo ?? null, priority: spec.priority ?? 0, dag_id: dag.id,
-          source_kind: "orchestrator", source_ref: dag.id,
+          title: spec.title,
+          body: spec.body,
+          role_id: spec.role_id ?? null,
+          repo: spec.repo ?? null,
+          priority: spec.priority ?? 0,
+          dag_id: dag.id,
+          source_kind: "orchestrator",
+          source_ref: dag.id,
           status: hasPred.has(spec.key) ? "blocked" : "pending",
         })
         keyToId[spec.key] = created.id
       }
       for (const [from, to] of edges) {
-        const fromId = keyToId[from], toId = keyToId[to]
+        const fromId = keyToId[from]
+        const toId = keyToId[to]
         if (!fromId || !toId) throw new GuardError(`edge references unknown task key: ${from} -> ${to}`)
         this.dao.addEdge(dag.id, fromId, toId)
       }
@@ -191,7 +239,14 @@ export class MultimanKernel {
     for (const t of this.dao.listTasks({ status: "claimed" })) {
       if (t.claimed_at && nowMs - Date.parse(t.claimed_at) > this.recoveryWindowMs) {
         this.dao.updateTask(t.id, { status: "assigned" })
-        this.dao.logEvent({ actor_kind: "system", actor_id: null, action: "task.sweep.claim_timeout", target_kind: "task", target_id: t.id, details: "{}" })
+        this.dao.logEvent({
+          actor_kind: "system",
+          actor_id: null,
+          action: "task.sweep.claim_timeout",
+          target_kind: "task",
+          target_id: t.id,
+          details: "{}",
+        })
         this.publish("task.transitioned", this.dao.getTask(t.id))
       }
     }
@@ -201,10 +256,24 @@ export class MultimanKernel {
       if (hb && nowMs - Date.parse(hb) > this.leaseWindowMs) {
         if (t.retry_count < this.maxRetry) {
           this.dao.updateTask(t.id, { status: "assigned", retry_count: t.retry_count + 1, last_heartbeat_at: null })
-          this.dao.logEvent({ actor_kind: "system", actor_id: null, action: "task.sweep.lease_retry", target_kind: "task", target_id: t.id, details: JSON.stringify({ retry: t.retry_count + 1 }) })
+          this.dao.logEvent({
+            actor_kind: "system",
+            actor_id: null,
+            action: "task.sweep.lease_retry",
+            target_kind: "task",
+            target_id: t.id,
+            details: JSON.stringify({ retry: t.retry_count + 1 }),
+          })
         } else {
           this.dao.updateTask(t.id, { status: "failed", error: "lease expired, max retries" })
-          this.dao.logEvent({ actor_kind: "system", actor_id: null, action: "task.sweep.lease_failed", target_kind: "task", target_id: t.id, details: "{}" })
+          this.dao.logEvent({
+            actor_kind: "system",
+            actor_id: null,
+            action: "task.sweep.lease_failed",
+            target_kind: "task",
+            target_id: t.id,
+            details: "{}",
+          })
           this.onTaskFailed(t.id)
         }
         this.publish("task.transitioned", this.dao.getTask(t.id))
@@ -218,8 +287,7 @@ export class MultimanKernel {
     for (const succ of this.dao.successorsOf(taskId)) {
       const s = this.dao.getTask(succ)
       if (!s || s.status !== "blocked") continue
-      const allDone = this.dao.predecessorsOf(succ)
-        .every((p) => this.dao.getTask(p)?.status === "done")
+      const allDone = this.dao.predecessorsOf(succ).every((p) => this.dao.getTask(p)?.status === "done")
       if (allDone) {
         const to = s.role_id ? "assigned" : "pending"
         this.dao.updateTask(succ, { status: to })
