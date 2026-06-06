@@ -63,7 +63,7 @@ const MULTIMAN_USAGE = [
   "  status [--watch] [--interval <ms>]   (live dashboard of roles/tasks/inbox/DAGs)",
   "  board   (standalone fullscreen kanban board of multiman tasks)",
   "  runner --role <id> [--timeout-ms <n>]   (long-running autonomous role-runner)",
-  "  orchestrator --role <id> [--timeout-ms <n>]   (long-running inbox->DAG decomposer)",
+  "  orchestrator --role <id> [--repo <path>] [--timeout-ms <n>]   (long-running inbox->DAG decomposer)",
   "",
   "Global: [--pretty] [--help]",
   "",

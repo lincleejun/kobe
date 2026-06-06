@@ -18,6 +18,7 @@
  * headless LLM). It mirrors `multiman-runner-cmd.ts`.
  */
 
+import { resolve } from "node:path"
 import { parseDecomposeOutput } from "@sma1lboy/multiman/decompose-parse"
 import { type DecomposeResult, type OrchestratorDeps, orchestrateLoop } from "@sma1lboy/multiman/orchestrator"
 import type { InboxItem, Role } from "@sma1lboy/multiman/types"
@@ -121,7 +122,7 @@ export function makeClaudeDecomposer(opts: DecomposerOpts): (item: InboxItem) =>
 class OrchestratorCliError extends Error {}
 
 const ORCHESTRATOR_USAGE = [
-  "Usage: kobe multiman orchestrator --role <id> [--timeout-ms <n>]",
+  "Usage: kobe multiman orchestrator --role <id> [--repo <path>] [--timeout-ms <n>]",
   "",
   "Run an autonomous decomposer: claim NEW inbox items for <id>, ask headless",
   "claude to reason each into a task DAG, create the DAG, and mark the item",
@@ -129,12 +130,20 @@ const ORCHESTRATOR_USAGE = [
   "",
   "Flags:",
   "  --role <id>         orchestrator role to run for (required)",
+  "  --repo <path>       default repo for decomposed tasks that don't specify one",
+  "                      (without it, repo-less tasks can't be materialized/run)",
   "  --timeout-ms <n>    per-item decomposition timeout in ms (default 120000)",
   "",
 ].join("\n")
 
-function parseOrchestratorArgs(argv: readonly string[]): { roleId: string; timeoutMs?: number; help: boolean } {
+function parseOrchestratorArgs(argv: readonly string[]): {
+  roleId: string
+  repo?: string
+  timeoutMs?: number
+  help: boolean
+} {
   let roleId = ""
+  let repo: string | undefined
   let timeoutMs: number | undefined
   let help = false
   for (let i = 0; i < argv.length; i++) {
@@ -154,13 +163,14 @@ function parseOrchestratorArgs(argv: readonly string[]): { roleId: string; timeo
       i += 1
     }
     if (key === "role") roleId = value
+    else if (key === "repo") repo = resolve(process.cwd(), value)
     else if (key === "timeout-ms") {
       const n = Number.parseInt(value, 10)
       if (!Number.isInteger(n) || n <= 0) throw new OrchestratorCliError("--timeout-ms must be a positive integer")
       timeoutMs = n
     } else throw new OrchestratorCliError(`unknown flag: --${key}`)
   }
-  return { roleId, timeoutMs, help }
+  return { roleId, repo, timeoutMs, help }
 }
 
 function ts(): string {
@@ -173,7 +183,7 @@ function ts(): string {
  * decomposer into the pure orchestrator loop and runs until SIGINT/SIGTERM.
  */
 export async function runMultimanOrchestrator(argv: readonly string[]): Promise<void> {
-  let parsed: { roleId: string; timeoutMs?: number; help: boolean }
+  let parsed: { roleId: string; repo?: string; timeoutMs?: number; help: boolean }
   try {
     parsed = parseOrchestratorArgs(argv)
   } catch (err) {
@@ -189,6 +199,7 @@ export async function runMultimanOrchestrator(argv: readonly string[]): Promise<
     process.exit(2)
   }
   const roleId = parsed.roleId
+  const defaultRepo = parsed.repo
 
   const log = (msg: string): void => {
     process.stderr.write(`[${ts()}] orchestrator(${roleId}) ${msg}\n`)
@@ -245,11 +256,21 @@ export async function runMultimanOrchestrator(argv: readonly string[]): Promise<
       const match = roles.find((r) => r.name.toLowerCase() === wanted)
       return match ? match.id : null
     },
-    createDag: (info, tasks, edges) =>
-      client.request("multiman", {
+    createDag: (info, tasks, edges) => {
+      // A decomposed task's own `repo` wins; otherwise inherit the orchestrator's
+      // --repo default. Without either, repo stays null: the task is created but
+      // can't be materialized into a worktree (un-runnable) — warn so it's honest,
+      // not a silent dead task.
+      const withRepo = tasks.map((t) => ({ ...t, repo: t.repo ?? defaultRepo ?? null }))
+      const repoLess = withRepo.filter((t) => t.repo === null).length
+      if (repoLess > 0) {
+        log(`warning: ${repoLess}/${withRepo.length} task(s) have no repo and won't be runnable (pass --repo <path>)`)
+      }
+      return client.request("multiman", {
         method: "dag.create",
-        params: { title: info.title, tasks, edges },
-      }),
+        params: { title: info.title, tasks: withRepo, edges },
+      })
+    },
     markInbox: (id, status) =>
       client.request("multiman", { method: "inbox.mark", params: { id, status } }).then(() => undefined),
     waitForWork: () =>
