@@ -44,6 +44,7 @@ const MULTIMAN_USAGE = [
   "  task claim --role <id>",
   "  task transition <taskId> --to <status>",
   "  task get <taskId>",
+  "  runner --role <id> [--timeout-ms <n>]   (long-running autonomous role-runner)",
   "",
   "Global: [--pretty] [--help]",
   "",
@@ -210,6 +211,15 @@ export async function runMultimanSubcommand(argv: readonly string[]): Promise<vo
   const [noun, verb, ...rest] = argv
   if (!noun || noun === "--help" || noun === "-h" || noun === "help") {
     process.stdout.write(`${MULTIMAN_USAGE}\n`)
+    return
+  }
+
+  // `runner` is the long-running autonomous role-runner, not a one-shot RPC —
+  // it owns its own daemon lifetime + subscription, so it bypasses the thin
+  // request/emit/close path below entirely.
+  if (noun === "runner") {
+    const { runMultimanRunner } = await import("./multiman-runner-cmd.ts")
+    await runMultimanRunner(verb === undefined ? rest : [verb, ...rest])
     return
   }
 
