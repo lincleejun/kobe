@@ -1,6 +1,23 @@
 // src/db/dao.ts
 import type { Database, SQLQueryBindings } from "bun:sqlite"
-import type { Dag, EventLogRow, Role, RoleKind, Task, TaskStatus } from "../types"
+import type {
+  Dag,
+  EventLogRow,
+  InboxItem,
+  InboxSeverity,
+  InboxStatus,
+  Role,
+  RoleKind,
+  Schedule,
+  ScheduleConcurrencyPolicy,
+  ScheduleExecutionMode,
+  ScheduleRun,
+  ScheduleRunStatus,
+  ScheduleTargetKind,
+  ScheduleTriggerKind,
+  Task,
+  TaskStatus,
+} from "../types"
 
 type Clock = () => string
 type IdGen = () => string
@@ -23,6 +40,23 @@ export interface CreateTaskInput {
   source_kind?: Task["source_kind"]
   source_ref?: string | null
   status?: TaskStatus
+}
+export interface CreateInboxItemInput {
+  source: string
+  kind: string
+  payload?: string
+  severity?: InboxSeverity
+}
+export interface CreateScheduleInput {
+  name: string
+  trigger_kind: ScheduleTriggerKind
+  cron_expr?: string | null
+  timezone?: string
+  target_kind: ScheduleTargetKind
+  target_ref: string
+  execution_mode?: ScheduleExecutionMode
+  concurrency_policy?: ScheduleConcurrencyPolicy
+  next_run_at?: string | null
 }
 
 export class Dao {
@@ -137,6 +171,131 @@ export class Dao {
   }
   setDagStatus(dagId: string, status: Dag["status"]): void {
     this.db.query("UPDATE dag SET status=?, updated_at=? WHERE id=?").run(status, this.now(), dagId)
+  }
+
+  // ---- inbox_item ----
+  createInboxItem(i: CreateInboxItemInput): InboxItem {
+    const id = this.id()
+    this.db
+      .query(
+        `INSERT INTO inbox_item (id,source,kind,payload,severity,status,created_at)
+       VALUES (?,?,?,?,?, 'new', ?)`,
+      )
+      .run(id, i.source, i.kind, i.payload ?? "{}", i.severity ?? "info", this.now())
+    return this.getInboxItem(id)!
+  }
+  getInboxItem(id: string): InboxItem | undefined {
+    return this.db.query("SELECT * FROM inbox_item WHERE id=?").get(id) as InboxItem | undefined
+  }
+  listInboxItems(f: { status?: InboxStatus } = {}): InboxItem[] {
+    if (f.status) {
+      return this.db
+        .query("SELECT * FROM inbox_item WHERE status=? ORDER BY created_at ASC")
+        .all(f.status) as InboxItem[]
+    }
+    return this.db.query("SELECT * FROM inbox_item ORDER BY created_at ASC").all() as InboxItem[]
+  }
+  // Atomic claim: pick the oldest 'new' item and mark it 'claimed'. Mirrors the
+  // task-claim UPDATE ... RETURNING pattern; relies on the single-writer invariant.
+  claimInboxItem(consumer: string): InboxItem | null {
+    const row = this.db
+      .query(
+        `UPDATE inbox_item SET status='claimed', consumed_by=?
+         WHERE id = (
+           SELECT id FROM inbox_item WHERE status='new' ORDER BY created_at ASC LIMIT 1)
+       RETURNING *`,
+      )
+      .get(consumer) as InboxItem | undefined
+    return row ?? null
+  }
+  markInboxItem(id: string, status: InboxStatus): InboxItem {
+    this.db.query("UPDATE inbox_item SET status=? WHERE id=?").run(status, id)
+    return this.getInboxItem(id)!
+  }
+
+  // ---- schedule ----
+  createSchedule(i: CreateScheduleInput): Schedule {
+    const id = this.id()
+    this.db
+      .query(
+        `INSERT INTO schedule (id,name,trigger_kind,cron_expr,timezone,target_kind,target_ref,
+         execution_mode,concurrency_policy,next_run_at,enabled,created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?, 1, ?)`,
+      )
+      .run(
+        id,
+        i.name,
+        i.trigger_kind,
+        i.cron_expr ?? null,
+        i.timezone ?? "UTC",
+        i.target_kind,
+        i.target_ref,
+        i.execution_mode ?? "collect",
+        i.concurrency_policy ?? "skip",
+        i.next_run_at ?? null,
+        this.now(),
+      )
+    return this.getSchedule(id)!
+  }
+  getSchedule(id: string): Schedule | undefined {
+    return this.db.query("SELECT * FROM schedule WHERE id=?").get(id) as Schedule | undefined
+  }
+  listSchedules(f: { enabled?: boolean } = {}): Schedule[] {
+    if (f.enabled !== undefined) {
+      return this.db
+        .query("SELECT * FROM schedule WHERE enabled=? ORDER BY created_at ASC")
+        .all(f.enabled ? 1 : 0) as Schedule[]
+    }
+    return this.db.query("SELECT * FROM schedule ORDER BY created_at ASC").all() as Schedule[]
+  }
+  updateSchedule(id: string, patch: Partial<Omit<Schedule, "id" | "created_at">>): Schedule {
+    const cols = Object.keys(patch)
+    if (cols.length === 0) return this.getSchedule(id)!
+    const set = cols.map((c) => `${c}=?`).join(", ")
+    const args = cols.map((c) => (patch as Record<string, unknown>)[c]) as SQLQueryBindings[]
+    this.db.query(`UPDATE schedule SET ${set} WHERE id=?`).run(...args, id)
+    return this.getSchedule(id)!
+  }
+  setScheduleEnabled(id: string, enabled: boolean): Schedule {
+    this.db.query("UPDATE schedule SET enabled=? WHERE id=?").run(enabled ? 1 : 0, id)
+    return this.getSchedule(id)!
+  }
+  dueSchedules(nowIso: string): Schedule[] {
+    return this.db
+      .query(
+        `SELECT * FROM schedule
+          WHERE enabled=1 AND next_run_at IS NOT NULL AND next_run_at <= ?
+          ORDER BY next_run_at ASC`,
+      )
+      .all(nowIso) as Schedule[]
+  }
+
+  // ---- schedule_run ----
+  createScheduleRun(i: { schedule_id: string; status: ScheduleRunStatus }): ScheduleRun {
+    const id = this.id()
+    const startedAt = i.status === "pending" ? null : this.now()
+    this.db
+      .query("INSERT INTO schedule_run (id,schedule_id,status,started_at) VALUES (?,?,?,?)")
+      .run(id, i.schedule_id, i.status, startedAt)
+    return this.getScheduleRun(id)!
+  }
+  getScheduleRun(id: string): ScheduleRun | undefined {
+    return this.db.query("SELECT * FROM schedule_run WHERE id=?").get(id) as ScheduleRun | undefined
+  }
+  finishScheduleRun(
+    id: string,
+    r: { status: ScheduleRunStatus; produced_inbox_item_id?: string | null; error?: string | null },
+  ): ScheduleRun {
+    this.db
+      .query("UPDATE schedule_run SET status=?, finished_at=?, produced_inbox_item_id=?, error=? WHERE id=?")
+      .run(r.status, this.now(), r.produced_inbox_item_id ?? null, r.error ?? null, id)
+    return this.getScheduleRun(id)!
+  }
+  activeRunCountForSchedule(scheduleId: string): number {
+    const row = this.db
+      .query("SELECT COUNT(*) AS c FROM schedule_run WHERE schedule_id=? AND status IN ('pending','running')")
+      .get(scheduleId) as { c: number }
+    return row.c
   }
 
   // ---- event log ----

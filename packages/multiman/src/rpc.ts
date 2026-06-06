@@ -1,6 +1,15 @@
 // src/rpc.ts
 import type { MultimanKernel } from "./kernel"
-import type { RoleKind, TaskStatus } from "./types"
+import type {
+  InboxSeverity,
+  InboxStatus,
+  RoleKind,
+  ScheduleConcurrencyPolicy,
+  ScheduleExecutionMode,
+  ScheduleTargetKind,
+  ScheduleTriggerKind,
+  TaskStatus,
+} from "./types"
 
 type Params = Record<string, unknown>
 
@@ -71,6 +80,45 @@ export function makeRpcHandler(kernel: MultimanKernel): RpcHandler {
         (p.edges as [string, string][] | undefined) ?? [],
       ),
     "dag.get": (p) => kernel.getDag(reqStr(p, "id")),
+    // inbox.* (S2 scope)
+    "inbox.push": (p) =>
+      kernel.pushInbox({
+        source: reqStr(p, "source"),
+        kind: reqStr(p, "kind"),
+        payload: optStr(p, "payload"),
+        severity: optStr(p, "severity") as InboxSeverity | undefined,
+      }),
+    "inbox.list": (p) => kernel.listInbox({ status: optStr(p, "status") as InboxStatus | undefined }),
+    "inbox.claim": (p) => kernel.claimInbox(reqStr(p, "consumer")),
+    "inbox.mark": (p) => kernel.markInbox(reqStr(p, "id"), reqStr(p, "status") as InboxStatus),
+    // schedule.* (S2 scope)
+    "schedule.create": (p) =>
+      kernel.createSchedule({
+        name: reqStr(p, "name"),
+        trigger_kind: reqStr(p, "triggerKind") as ScheduleTriggerKind,
+        cron_expr: optStr(p, "cronExpr") ?? null,
+        timezone: optStr(p, "timezone"),
+        target_kind: reqStr(p, "targetKind") as ScheduleTargetKind,
+        target_ref: reqStr(p, "targetRef"),
+        execution_mode: optStr(p, "executionMode") as ScheduleExecutionMode | undefined,
+        concurrency_policy: optStr(p, "concurrencyPolicy") as ScheduleConcurrencyPolicy | undefined,
+      }),
+    "schedule.list": (p) => kernel.listSchedules(typeof p.enabled === "boolean" ? { enabled: p.enabled } : {}),
+    "schedule.update": (p) => {
+      const patch: Record<string, unknown> = {}
+      if (optStr(p, "name") !== undefined) patch.name = optStr(p, "name")
+      if (optStr(p, "cronExpr") !== undefined) patch.cron_expr = optStr(p, "cronExpr")
+      if (optStr(p, "timezone") !== undefined) patch.timezone = optStr(p, "timezone")
+      if (optStr(p, "executionMode") !== undefined) patch.execution_mode = optStr(p, "executionMode")
+      if (optStr(p, "concurrencyPolicy") !== undefined) patch.concurrency_policy = optStr(p, "concurrencyPolicy")
+      if (optStr(p, "nextRunAt") !== undefined) patch.next_run_at = optStr(p, "nextRunAt")
+      return kernel.updateSchedule(reqStr(p, "id"), patch)
+    },
+    "schedule.enable": (p) => {
+      if (typeof p.enabled !== "boolean") throw new Error("missing/invalid param: enabled")
+      return kernel.setScheduleEnabled(reqStr(p, "id"), p.enabled)
+    },
+    "schedule.runNow": (p) => kernel.scheduleRunNow(reqStr(p, "id")),
   }
   return async (method, params) => {
     const fn = routes[method]

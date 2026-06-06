@@ -1,9 +1,11 @@
+import { nextRun } from "./cron"
 import { hasCycle } from "./dag"
 // src/kernel.ts
 import type { Dao } from "./db/dao"
+import type { CreateInboxItemInput, CreateScheduleInput } from "./db/dao"
 import { CyclicDagError, GuardError } from "./errors"
 import { assertTransition } from "./state-machine"
-import type { Dag, DagEdge, Role, RoleKind, Task, TaskStatus } from "./types"
+import type { Dag, DagEdge, InboxItem, InboxStatus, Role, RoleKind, Schedule, Task, TaskStatus } from "./types"
 
 export interface KobeOrchestratorPort {
   adoptWorktree(input: {
@@ -87,6 +89,79 @@ export class MultimanKernel {
     }
   }
 
+  // ---- inbox pass-throughs (S2) ----
+  pushInbox(i: CreateInboxItemInput): InboxItem {
+    const item = this.dao.createInboxItem(i)
+    this.dao.logEvent({
+      actor_kind: "system",
+      actor_id: i.source,
+      action: "inbox.push",
+      target_kind: "inbox",
+      target_id: item.id,
+      details: "{}",
+    })
+    this.publish("inbox.pushed", item)
+    return item
+  }
+  listInbox(f?: { status?: InboxStatus }): InboxItem[] {
+    return this.dao.listInboxItems(f)
+  }
+  claimInbox(consumer: string): InboxItem | null {
+    const item = this.dao.claimInboxItem(consumer)
+    if (!item) return null
+    this.dao.logEvent({
+      actor_kind: "role",
+      actor_id: consumer,
+      action: "inbox.claim",
+      target_kind: "inbox",
+      target_id: item.id,
+      details: "{}",
+    })
+    this.publish("inbox.claimed", item)
+    return item
+  }
+  markInbox(id: string, status: InboxStatus): InboxItem {
+    return this.dao.markInboxItem(id, status)
+  }
+
+  // ---- schedule pass-throughs (S2) ----
+  createSchedule(i: CreateScheduleInput): Schedule {
+    // For cron triggers, seed next_run_at so the worker (part B) can pick it up.
+    const next =
+      i.trigger_kind === "cron" && i.cron_expr && i.next_run_at === undefined
+        ? nextRun(i.cron_expr, this.now())
+        : i.next_run_at
+    const s = this.dao.createSchedule({ ...i, next_run_at: next ?? null })
+    this.publish("schedule.created", s)
+    return s
+  }
+  getSchedule(id: string): Schedule | undefined {
+    return this.dao.getSchedule(id)
+  }
+  listSchedules(f?: { enabled?: boolean }): Schedule[] {
+    return this.dao.listSchedules(f)
+  }
+  updateSchedule(id: string, patch: Parameters<Dao["updateSchedule"]>[1]): Schedule {
+    const s = this.dao.updateSchedule(id, patch)
+    this.publish("schedule.updated", s)
+    return s
+  }
+  setScheduleEnabled(id: string, enabled: boolean): Schedule {
+    const s = this.dao.setScheduleEnabled(id, enabled)
+    this.publish("schedule.updated", s)
+    return s
+  }
+  // runNow: set next_run_at = now so the worker fires it on its next tick (part B).
+  scheduleRunNow(id: string): Schedule {
+    const s = this.dao.updateSchedule(id, { next_run_at: this.now() })
+    this.publish("schedule.updated", s)
+    return s
+  }
+  // Accessor for the part-B worker (must not reach into the private dao field).
+  getDao(): Dao {
+    return this.dao
+  }
+
   async transition(id: string, to: TaskStatus, reason: string, opts: { roleId?: string } = {}): Promise<Task> {
     const t = this.dao.getTask(id)
     if (!t) throw new GuardError(`task not found: ${id}`)
@@ -161,7 +236,13 @@ export class MultimanKernel {
     if (!t.repo) throw new GuardError(`task ${taskId} has no repo to materialize`)
     const branch = `multiman/${t.id}`
     const worktreePath = `${t.repo}/.claude/worktrees/${t.id}`
-    const res = await this.orch.adoptWorktree({ repo: t.repo, worktreePath, branch, ifExists: "return", title: t.title })
+    const res = await this.orch.adoptWorktree({
+      repo: t.repo,
+      worktreePath,
+      branch,
+      ifExists: "return",
+      title: t.title,
+    })
     this.dao.updateTask(taskId, { kobe_task_id: res.id, work_dir: res.worktreePath })
     return { kobeTaskId: res.id, worktreePath: res.worktreePath }
   }
