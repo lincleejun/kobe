@@ -8,10 +8,13 @@ import { MultimanKernel } from "@/kernel"
 
 function fakeOrchestrator() {
   const calls: { adopt: number; create: number } = { adopt: 0, create: 0 }
+  const adoptInputs: { repo: string; worktreePath: string; branch: string; title?: string }[] = []
   return {
     calls,
-    async adoptWorktree(input: { repo: string; worktreePath: string; branch: string }) {
+    adoptInputs,
+    async adoptWorktree(input: { repo: string; worktreePath: string; branch: string; title?: string }) {
       calls.adopt++
+      adoptInputs.push(input)
       return { id: `kobe-${input.branch}`, worktreePath: input.worktreePath }
     },
     async createTask() {
@@ -94,6 +97,8 @@ describe("materialize (Finding 1 idempotency)", () => {
     expect(running.kobe_task_id).toBe(`kobe-multiman/${t.id}`)
     expect(orch.calls.adopt).toBe(1)
     expect(orch.calls.create).toBe(0)
+    // title must be threaded through so kobe TUI shows the human title
+    expect(orch.adoptInputs[0]?.title).toBe("x")
 
     // simulate crash retry: re-materialize must reuse, not duplicate
     const again = await kernel.materialize(t.id)

@@ -247,6 +247,7 @@ export async function startDaemonServer(orch: Orchestrator, options: DaemonServe
     worktreePath: string
     branch: string
     ifExists: "return"
+    title?: string
   }): Promise<{ id: string; worktreePath: string }> => {
     if (worktrees) await worktrees.create(i.repo, i.branch, i.worktreePath, "HEAD")
     const t = await orch.adoptWorktree({
@@ -254,6 +255,7 @@ export async function startDaemonServer(orch: Orchestrator, options: DaemonServe
       worktreePath: i.worktreePath,
       branch: i.branch,
       ifExists: i.ifExists,
+      title: i.title,
     })
     return { id: t.id, worktreePath: t.worktreePath }
   }

@@ -11,6 +11,7 @@ export interface KobeOrchestratorPort {
     worktreePath: string
     branch: string
     ifExists: "return"
+    title?: string
   }): Promise<{ id: string; worktreePath: string }>
 }
 
@@ -160,7 +161,7 @@ export class MultimanKernel {
     if (!t.repo) throw new GuardError(`task ${taskId} has no repo to materialize`)
     const branch = `multiman/${t.id}`
     const worktreePath = `${t.repo}/.claude/worktrees/${t.id}`
-    const res = await this.orch.adoptWorktree({ repo: t.repo, worktreePath, branch, ifExists: "return" })
+    const res = await this.orch.adoptWorktree({ repo: t.repo, worktreePath, branch, ifExists: "return", title: t.title })
     this.dao.updateTask(taskId, { kobe_task_id: res.id, work_dir: res.worktreePath })
     return { kobeTaskId: res.id, worktreePath: res.worktreePath }
   }
