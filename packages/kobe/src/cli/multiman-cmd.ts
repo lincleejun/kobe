@@ -348,9 +348,24 @@ function toRpc(noun: string, verb: string, parsed: ParsedArgs): { method: string
   throw new CliError(`unknown multiman command: ${noun}`)
 }
 
+/** Strip ANSI SGR / cursor escape sequences. */
+// biome-ignore lint/suspicious/noControlCharactersInRegex: matching ESC by design.
+const ANSI_RE = /\x1b\[[0-9;?]*[A-Za-z]/g
+
+/**
+ * Print the kernel result as JSON on stdout.
+ *
+ * JSON output is DATA, never decoration: it must always be machine-readable so
+ * `kobe multiman … | jq` / `JSON.parse` work. `JSON.stringify` already produces
+ * plain text, but we additionally strip any stray ANSI escape (defence in depth
+ * against a future colorized value) whenever stdout is NOT a TTY or `NO_COLOR`
+ * is set — i.e. exactly when a human isn't watching a terminal. The guarantee:
+ * a piped/redirected `emit` never contains an escape sequence.
+ */
 function emit(value: unknown, pretty: boolean): void {
   const text = pretty ? JSON.stringify(value, null, 2) : JSON.stringify(value)
-  process.stdout.write(`${text}\n`)
+  const plain = process.env.NO_COLOR !== undefined || !process.stdout.isTTY
+  process.stdout.write(`${plain ? text.replace(ANSI_RE, "") : text}\n`)
 }
 
 function fail(message: string, exitCode = 1): never {
