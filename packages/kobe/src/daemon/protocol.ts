@@ -108,6 +108,10 @@ export type DaemonRequestName =
   // normalized engine activity event for a task; the daemon folds it into
   // the task's transient activity state and broadcasts `engine-state`.
   | "engine.reportEvent"
+  // Multiman kernel RPC (KOB): a single passthrough request that tunnels the
+  // multiman JSON-RPC (`{ method, params }`) to the in-process kernel mounted
+  // by the daemon. Kernel-emitted events fan out on the `multiman` channel.
+  | "multiman"
 
 /**
  * Subscribe role (KOB) — distinguishes WHO is subscribing, so the daemon's
@@ -123,10 +127,15 @@ export type DaemonRequestName =
  *   counting them wedged the daemon open forever — N ChatTab windows meant N
  *   Tasks panes, so the count never reached 0 on quit.
  *
+ * - `runner` — a multiman runner process that drains the kernel's task queue.
+ *   Like `gui` it HOLDS the daemon alive: while a runner is attached there is
+ *   live orchestration work in flight, so the daemon must not lazily self-stop
+ *   out from under it. (See the multiman kernel mounted in `server.ts`.)
+ *
  * Default is `pane`: a subscriber that forgets to declare a role is the safe
  * non-holding kind, so a future client can never accidentally pin the daemon.
  */
-export type SubscribeRole = "gui" | "pane"
+export type SubscribeRole = "gui" | "pane" | "runner"
 
 /**
  * Channel registry — the SINGLE source of truth for daemon→client push
@@ -167,6 +176,15 @@ export interface ChannelPayloads {
    * recent task's state; the daemon also lets a state lapse back to idle.
    */
   "engine-state": { taskId: string; state: TaskActivityState; detail?: EngineActivityDetail; at: number }
+  /**
+   * Multiman kernel events (KOB) — every state-change the in-process multiman
+   * kernel emits (`task.created` / `task.transitioned` / `role.created` / …),
+   * tunneled to subscribers over the daemon socket. `kind` is the kernel's
+   * event name; `payload` is the kernel's opaque event body. The kernel is the
+   * source of truth for the shape, so this channel is deliberately untyped on
+   * the daemon side (a passthrough), like the `multiman` request.
+   */
+  multiman: { kind: string; payload: unknown }
   // Add a channel ↓ then `bus.publish(name, payload)` in the daemon and
   // `client.onChannel(name, …)` in a consumer — that's the whole recipe:
   // "cost": { taskId: string; usd: number; tokens: number }
@@ -177,7 +195,13 @@ export interface ChannelPayloads {
 export type ChannelName = keyof ChannelPayloads
 
 /** Runtime channel list — defaults subscribe-to-all + validates a filter. */
-export const CHANNEL_NAMES: readonly ChannelName[] = ["task.snapshot", "active-task", "update", "engine-state"]
+export const CHANNEL_NAMES: readonly ChannelName[] = [
+  "task.snapshot",
+  "active-task",
+  "update",
+  "engine-state",
+  "multiman",
+]
 
 /**
  * Event-frame names: every {@link ChannelName}, plus `daemon.stopping` — a
