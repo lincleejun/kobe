@@ -9,6 +9,7 @@
     "./decompose-parse": "./src/decompose-parse.ts",
     "./orchestrator": "./src/orchestrator.ts",
     "./runner": "./src/runner.ts",
+    "./status-view": "./src/status-view.ts",
     "./types": "./src/types.ts"
   },
   "scripts": {
