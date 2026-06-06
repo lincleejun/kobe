@@ -1,6 +1,6 @@
 // src/kernel.ts
 import type { Dao } from "@/db/dao"
-import type { Dag, Task, TaskStatus } from "@/types"
+import type { Dag, DagEdge, Role, RoleKind, Task, TaskStatus } from "@/types"
 import { assertTransition } from "@/state-machine"
 import { hasCycle } from "@/dag"
 import { CyclicDagError, GuardError } from "@/errors"
@@ -51,6 +51,22 @@ export class MultimanKernel {
   }
   getTask(id: string): Task | undefined { return this.dao.getTask(id) }
   listTasks(f?: Parameters<Dao["listTasks"]>[0]): Task[] { return this.dao.listTasks(f) }
+
+  // Thin pass-throughs for the RPC layer (rpc.ts must not reach into dao directly).
+  createRoleViaDao(name: string, kind: RoleKind, instructions?: string, vendor?: string, model?: string): Role {
+    const r = this.dao.createRole({ name, kind, instructions, vendor: vendor ?? null, model: model ?? null })
+    this.publish("role.created", r)
+    return r
+  }
+  getRole(id: string): Role | undefined { return this.dao.getRole(id) }
+  listRoles(): Role[] { return this.dao.listRoles() }
+  getDag(id: string): { dag: Dag | undefined; tasks: Task[]; edges: DagEdge[] } {
+    return {
+      dag: this.dao.raw().query("SELECT * FROM dag WHERE id=?").get(id) as Dag | undefined,
+      tasks: this.dao.listTasks({ dag_id: id }),
+      edges: this.dao.raw().query("SELECT * FROM dag_edge WHERE dag_id=?").all(id) as DagEdge[],
+    }
+  }
 
   async transition(id: string, to: TaskStatus, reason: string, opts: { roleId?: string } = {}): Promise<Task> {
     const t = this.dao.getTask(id)
